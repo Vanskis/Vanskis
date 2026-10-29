@@ -148,7 +148,10 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                 val filter = ReplyFilter(
                     thinkStart = markers[0].firstOrNull()?.let(::utf8),
                     thinkEnds = markers[1].map(::utf8),
-                    toolStarts = markers[2].map(::utf8),
+                    // A template whose triggers are patterns reports no words: fall back to the LFM markers.
+                    toolStarts = markers[2].map(::utf8).ifEmpty {
+                        if (params.tools.isEmpty()) emptyList() else LFM_TOOL_STARTS
+                    },
                 )
                 val counts = native {
                     LlamaNative.nativeBeginReply(
@@ -242,5 +245,8 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
 
     private companion object {
         const val TAG = "LlamaEngine"
+
+        /** LFM3 (`<tool_call>`) and LFM2/2.5 (`<|tool_call_start|>`) tool-call openers. */
+        val LFM_TOOL_STARTS = listOf("<tool_call>", "<|tool_call_start|>")
     }
 }
