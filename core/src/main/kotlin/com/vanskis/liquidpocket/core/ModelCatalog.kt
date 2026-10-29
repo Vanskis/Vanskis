@@ -10,6 +10,11 @@ data class ModelSpec(
     val approxSizeBytes: Long,
     /** Only offered models appear in the UI; others are catalogued for later milestones. */
     val offered: Boolean,
+    /**
+     * Null: no multimodal projector. Otherwise quant tags to look for in `mmproj` filenames, in
+     * order of preference (case-insensitive); the smallest mmproj is used if none match.
+     */
+    val mmprojQuants: List<String>? = null,
 )
 
 object ModelCatalog {
@@ -20,6 +25,7 @@ object ModelCatalog {
         quant = "Q4_K_M",
         approxSizeBytes = 1_300_000_000L,
         offered = true,
+        mmprojQuants = listOf("Q8_0", "F16", "BF16"),
     )
 
     /** The "smart" model, used from M4. */
@@ -29,7 +35,7 @@ object ModelCatalog {
         repo = "LiquidAI/LFM2.5-8B-A1B-GGUF",
         quant = "Q4_K_M",
         approxSizeBytes = 5_000_000_000L,
-        offered = false,
+        offered = true,
     )
 
     val all: List<ModelSpec> = listOf(LFM3_OMNI_2B, LFM25_8B_A1B)

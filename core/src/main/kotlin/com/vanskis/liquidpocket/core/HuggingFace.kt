@@ -54,6 +54,22 @@ object HuggingFace {
                 !SHARD.containsMatchIn(name)
         }.minByOrNull { it.path.length }
 
+    /**
+     * Picks the multimodal projector: the first of [prefs] (case-insensitive) that some `mmproj`
+     * `.gguf` name contains, else the smallest `mmproj` file. Ties go to the shortest path.
+     */
+    fun selectMmproj(files: List<RepoFile>, prefs: List<String>): RepoFile? {
+        val projs = files.filter { f ->
+            val name = f.path.substringAfterLast('/').lowercase()
+            name.endsWith(".gguf") && name.contains("mmproj")
+        }
+        for (q in prefs) {
+            projs.filter { it.path.substringAfterLast('/').lowercase().contains(q.lowercase()) }
+                .minByOrNull { it.path.length }?.let { return it }
+        }
+        return projs.minWithOrNull(compareBy<RepoFile> { it.size }.thenBy { it.path.length })
+    }
+
     private val SHARD = Regex("""-\d{5}-of-\d{5}\.gguf$""")
 
     private fun JsonObject.string(key: String): String? = (this[key])?.jsonPrimitive?.contentOrNull

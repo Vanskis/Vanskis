@@ -44,6 +44,19 @@ class HuggingFaceTest {
         assertNull(HuggingFace.selectGguf(listOf(proj), "Q4_K_M"))
     }
 
+    @Test fun mmprojFollowsPreferenceOrder() {
+        val files = HuggingFace.parseTree(tree)
+        assertEquals("mmproj-LFM3-Omni-2B-Q8_0.gguf", HuggingFace.selectMmproj(files, listOf("q8_0", "F16"))?.path)
+        assertEquals("mmproj-LFM3-Omni-2B-Q4_K_M.gguf", HuggingFace.selectMmproj(files, listOf("F16", "Q4_K_M"))?.path)
+        assertEquals("AAAA".lowercase(), HuggingFace.selectMmproj(files, listOf("Q8_0"))?.sha256)
+    }
+
+    @Test fun mmprojFallsBackToSmallestAndIgnoresMainModels() {
+        val files = HuggingFace.parseTree(tree)
+        assertEquals("mmproj-LFM3-Omni-2B-Q4_K_M.gguf", HuggingFace.selectMmproj(files, listOf("F16", "BF16"))?.path)
+        assertNull(HuggingFace.selectMmproj(listOf(RepoFile("LFM3-Q8_0.gguf", 1, null)), listOf("Q8_0")))
+    }
+
     @Test fun noMatchReturnsNull() {
         assertNull(HuggingFace.selectGguf(HuggingFace.parseTree(tree), "Q2_K"))
     }
@@ -60,8 +73,10 @@ class HuggingFaceTest {
             HuggingFace.resolveUrl("LiquidAI/X", "sub/a b.gguf"))
     }
 
-    @Test fun catalogOffersOnlyOmniInM1() {
-        assertEquals(listOf(ModelCatalog.LFM3_OMNI_2B), ModelCatalog.offered)
+    @Test fun catalogOffersBothAndOnlyOmniHasProjector() {
+        assertEquals(listOf(ModelCatalog.LFM3_OMNI_2B, ModelCatalog.LFM25_8B_A1B), ModelCatalog.offered)
+        assertEquals(listOf("Q8_0", "F16", "BF16"), ModelCatalog.LFM3_OMNI_2B.mmprojQuants)
+        assertNull(ModelCatalog.LFM25_8B_A1B.mmprojQuants)
         assertEquals("LiquidAI/LFM2.5-8B-A1B-GGUF", ModelCatalog.byId("lfm2.5-8b-a1b")?.repo)
     }
 }
