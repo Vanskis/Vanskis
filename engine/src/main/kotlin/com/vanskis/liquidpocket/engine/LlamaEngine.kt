@@ -169,7 +169,10 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                 prefillDone = true
 
                 val utf8 = Utf8Accumulator()
-                while (generated < params.maxNewTokens && !stopRequested) {
+                // Audio frames come about two per text token; the cap ends a reply whose speech never stops.
+                var audioSteps = 0
+                val maxAudioSteps = params.maxNewTokens * 4
+                while (generated < params.maxNewTokens && audioSteps <= maxAudioSteps && !stopRequested) {
                     currentCoroutineContext().ensureActive()
                     val t0 = System.nanoTime()
                     val bytes = native { LlamaNative.nativeNextToken() }
@@ -178,7 +181,10 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     if (speaking) native { LlamaNative.nativeTakeAudio(flush = false) }?.let { emit(ReplyChunk.Audio(it)) }
                     if (bytes == null) break
                     // Steps that only made audio return no text and do not count as generated tokens.
-                    if (speaking && bytes.isEmpty()) continue
+                    if (speaking && bytes.isEmpty()) {
+                        audioSteps++
+                        continue
+                    }
                     generated++
                     val text = filter.append(utf8.append(bytes))
                     if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
