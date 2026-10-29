@@ -22,4 +22,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setTemperature(value: Float) {
         viewModelScope.launch { repo.setTemperature(value) }
     }
+
+    fun setDynamicColor(value: Boolean) {
+        viewModelScope.launch { repo.setDynamicColor(value) }
+    }
 }

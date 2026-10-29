@@ -7,10 +7,20 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
-/** Material You colors from the wallpaper (minSdk 33 always has dynamic color), light or dark. */
+/**
+ * Light or dark following the system. With [dynamicColor], Material You colors from the wallpaper
+ * (minSdk 33 always has them); otherwise the app's own [Palette].
+ */
 @Composable
-fun LiquidPocketTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val colors = if (isSystemInDarkTheme()) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+fun LiquidPocketTheme(dynamicColor: Boolean = true, content: @Composable () -> Unit) {
+    val dark = isSystemInDarkTheme()
+    val colors = when {
+        dynamicColor -> {
+            val context = LocalContext.current
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+        dark -> Palette.dark
+        else -> Palette.light
+    }
     MaterialTheme(colorScheme = colors, content = content)
 }

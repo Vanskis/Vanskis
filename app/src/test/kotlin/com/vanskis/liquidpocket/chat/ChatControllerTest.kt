@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
+import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
 import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.EngineConfig
@@ -7,7 +8,9 @@ import com.vanskis.liquidpocket.engine.EngineException
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.engine.GenerationStats
+import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
+import com.vanskis.liquidpocket.engine.ToolCall
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +35,7 @@ class ChatControllerTest {
     /** Streams whatever the test sends into [tokens]; [stop] ends the reply like the real engine. */
     private class FakeEngine : Engine {
         override val state = MutableStateFlow<EngineState>(EngineState.Idle)
+        override val capabilities = MutableStateFlow(Capabilities.NONE)
         override val lastStats = MutableStateFlow<GenerationStats?>(null)
         val loads = mutableListOf<Pair<String, Int>>()
         var trainedContext = 32768
@@ -39,6 +43,7 @@ class ChatControllerTest {
         var chatFailure: Exception? = null
         var publishStats = true
         var sent: List<ChatMessage>? = null
+        var chats = 0
         var tokens = Channel<String>(Channel.UNLIMITED)
 
         override suspend fun load(modelPath: String, config: EngineConfig) {
@@ -51,12 +56,15 @@ class ChatControllerTest {
             state.value = EngineState.Idle
         }
 
-        override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<String> = flow {
+        override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
             sent = messages
+            chats++
             val ready = state.value
             state.value = EngineState.Generating
             try {
-                for (t in tokens) emit(t)
+                for (t in tokens) emit(ReplyChunk.Text(t))
+                // Like the real engine, tool calls come once the text ends; they are not reply text.
+                emit(ReplyChunk.ToolCall(ToolCall("noop", "{}")))
                 chatFailure?.let { throw it }
             } finally {
                 if (publishStats) lastStats.value = GenerationStats(10, 100.0, 2, 25.0)
@@ -74,10 +82,52 @@ class ChatControllerTest {
         }
     }
 
+    /** Conversations in memory, ids from 1. */
+    private class FakeStore : ChatStore {
+        val titles = linkedMapOf<Long, String>()
+        val saved = mutableMapOf<Long, MutableList<Turn>>()
+        val facts = mutableListOf<String>()
+        private var nextId = 1L
+
+        override suspend fun createConversation(title: String): Long {
+            val id = nextId++
+            titles[id] = title
+            saved[id] = mutableListOf()
+            return id
+        }
+
+        override suspend fun turns(conversationId: Long): List<Turn> = saved.getValue(conversationId).toList()
+
+        override suspend fun appendTurn(conversationId: Long, turn: Turn) {
+            saved.getValue(conversationId) += turn
+        }
+
+        override suspend fun truncate(conversationId: Long, fromIndex: Int) {
+            val list = saved.getValue(conversationId)
+            while (list.size > fromIndex) list.removeAt(list.lastIndex)
+        }
+
+        override suspend fun deleteConversation(conversationId: Long) {
+            titles.remove(conversationId)
+            saved.remove(conversationId)
+        }
+
+        override suspend fun factTexts(): List<String> = facts.toList()
+    }
+
     private val engine = FakeEngine()
+    private val store = FakeStore()
     private val params = GenerationParams()
 
-    private fun TestScope.controller() = ChatController(engine, this, StandardTestDispatcher(testScheduler))
+    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler))
+
+    /** Sends [text] and lets the engine answer [reply] in full. */
+    private fun TestScope.exchange(c: ChatController, text: String, reply: String) {
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply(reply)
+        c.send(text, params)
+        advanceUntilIdle()
+    }
 
     private suspend fun ChatController.ready() = ensureLoaded("/m.gguf", 8192)
 
@@ -238,5 +288,187 @@ class ChatControllerTest {
 
         assertFalse(c.state.value.loading)
         assertTrue(c.state.value.error!!.contains("bad gguf"))
+    }
+
+    @Test fun `the first message saves a conversation titled after it, with both turns`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "What is a heat pump and how does it work in winter?", "It moves heat.")
+
+        val id = c.state.value.conversationId!!
+        assertEquals("What is a heat pump and how does it work…", store.titles[id])
+        assertEquals(c.state.value.turns, store.saved[id])
+        assertNotNull("stats are saved with the reply", store.saved.getValue(id)[1].stats)
+
+        exchange(c, "more", "Sure")
+        assertEquals("later turns go to the same conversation", listOf(id), store.titles.keys.toList())
+        assertEquals(4, store.saved.getValue(id).size)
+    }
+
+    @Test fun `regenerate replaces the last reply and resends the history up to its question`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+        exchange(c, "joke?", "Bad joke")
+
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("Good joke")
+        c.regenerate(params)
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                ChatMessage(Role.SYSTEM, SYSTEM_PROMPT),
+                ChatMessage(Role.USER, "hi"),
+                ChatMessage(Role.ASSISTANT, "Hello"),
+                ChatMessage(Role.USER, "joke?"),
+            ),
+            engine.sent,
+        )
+        val texts = listOf("hi", "Hello", "joke?", "Good joke")
+        assertEquals(texts, c.state.value.turns.map { it.text })
+        assertEquals(texts, store.saved.getValue(c.state.value.conversationId!!).map { it.text })
+    }
+
+    @Test fun `regenerate after a failed reply asks again`() = runTest {
+        val c = controller()
+        c.ready()
+        engine.chatFailure = EngineException("context full")
+        exchange(c, "hi", "")
+        engine.chatFailure = null
+
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("Hello")
+        c.regenerate(params)
+        advanceUntilIdle()
+
+        assertEquals(listOf("hi", "Hello"), c.state.value.turns.map { it.text })
+        assertEquals(2, engine.chats)
+    }
+
+    @Test fun `regenerate and edit are ignored while a reply is streaming`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+        engine.tokens = Channel(Channel.UNLIMITED)
+        c.send("more", params)
+        runCurrent()
+        c.regenerate(params)
+        c.editAndResend("other", params)
+        engine.reply("Sure")
+        advanceUntilIdle()
+
+        assertEquals(listOf("hi", "Hello", "more", "Sure"), c.state.value.turns.map { it.text })
+        assertEquals(2, engine.chats)
+    }
+
+    @Test fun `edit and resend replaces the last question and its reply`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+        exchange(c, "wether in Paris?", "Did you mean weather?")
+
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("Mild")
+        c.editAndResend("  weather in Paris?  ", params)
+        advanceUntilIdle()
+
+        assertEquals(ChatMessage(Role.USER, "weather in Paris?"), engine.sent!!.last())
+        assertEquals(4, engine.sent!!.size)
+        val texts = listOf("hi", "Hello", "weather in Paris?", "Mild")
+        assertEquals(texts, c.state.value.turns.map { it.text })
+        assertEquals(texts, store.saved.getValue(c.state.value.conversationId!!).map { it.text })
+    }
+
+    @Test fun `opening a conversation restores its turns and continues it`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "first chat", "One")
+        val first = c.state.value.conversationId!!
+        c.newChat()
+        advanceUntilIdle()
+        assertNull(c.state.value.conversationId)
+        assertEquals(emptyList<Turn>(), c.state.value.turns)
+
+        exchange(c, "second chat", "Two")
+        val second = c.state.value.conversationId!!
+        assertTrue(first != second)
+        assertEquals("second chat", store.titles[second])
+
+        c.open(first)
+        advanceUntilIdle()
+        assertEquals(first, c.state.value.conversationId)
+        assertEquals(listOf("first chat", "One"), c.state.value.turns.map { it.text })
+
+        exchange(c, "again", "Three")
+        assertEquals(
+            listOf(Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.USER),
+            engine.sent!!.map { it.role },
+        )
+        assertEquals("first chat", engine.sent!![1].content)
+        assertEquals(4, store.saved.getValue(first).size)
+        assertEquals(2, store.saved.getValue(second).size)
+    }
+
+    @Test fun `opening another conversation mid-reply keeps the partial reply in the old one`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "old", "Done")
+        val old = c.state.value.conversationId!!
+        c.newChat()
+        advanceUntilIdle()
+        engine.tokens = Channel(Channel.UNLIMITED)
+        c.send("new", params)
+        engine.tokens.send("Par")
+        runCurrent()
+        val current = c.state.value.conversationId!!
+
+        c.open(old)
+        advanceUntilIdle()
+
+        assertEquals(listOf("old", "Done"), c.state.value.turns.map { it.text })
+        assertFalse(c.state.value.generating)
+        assertEquals(listOf("new", "Par"), store.saved.getValue(current).map { it.text })
+    }
+
+    @Test fun `deleting the open conversation starts a new chat`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+        val id = c.state.value.conversationId!!
+
+        c.deleteConversation(id)
+        advanceUntilIdle()
+
+        assertNull(c.state.value.conversationId)
+        assertEquals(emptyList<Turn>(), c.state.value.turns)
+        assertFalse(store.saved.containsKey(id))
+    }
+
+    @Test fun `remembered facts are appended to the system prompt`() = runTest {
+        store.facts += listOf("My name is Van.", "I live in  Lyon.")
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello Van")
+
+        assertEquals(
+            ChatMessage(
+                Role.SYSTEM,
+                "$SYSTEM_PROMPT\n\n${SystemPrompt.FACTS_HEADER}\n- My name is Van.\n- I live in Lyon.",
+            ),
+            engine.sent!!.first(),
+        )
+    }
+
+    @Test fun `a stop before the reply reaches the engine starts no reply`() = runTest {
+        val c = controller()
+        c.ready()
+        c.send("hi", params)
+        c.stop()
+        advanceUntilIdle()
+
+        assertEquals(0, engine.chats)
+        assertFalse(c.state.value.generating)
+        assertEquals(listOf("hi"), c.state.value.turns.map { it.text })
     }
 }

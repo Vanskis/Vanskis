@@ -3,6 +3,7 @@ package com.vanskis.liquidpocket.settings
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -18,6 +19,8 @@ import java.io.IOException
 data class AppSettings(
     val contextSize: Int = ContextSize.DEFAULT,
     val temperature: Float = DEFAULT_TEMPERATURE,
+    /** Material You colors from the wallpaper; off uses the app's own palette. */
+    val dynamicColor: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -37,6 +40,7 @@ class SettingsRepository(context: Context) {
             AppSettings(
                 contextSize = prefs[CONTEXT_SIZE] ?: ContextSize.DEFAULT,
                 temperature = prefs[TEMPERATURE] ?: AppSettings.DEFAULT_TEMPERATURE,
+                dynamicColor = prefs[DYNAMIC_COLOR] ?: true,
             )
         }
         .distinctUntilChanged()
@@ -49,8 +53,13 @@ class SettingsRepository(context: Context) {
         store.edit { it[TEMPERATURE] = value.coerceIn(0f, AppSettings.MAX_TEMPERATURE) }
     }
 
+    suspend fun setDynamicColor(value: Boolean) {
+        store.edit { it[DYNAMIC_COLOR] = value }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
+        val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
     }
 }
