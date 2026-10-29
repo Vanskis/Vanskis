@@ -60,6 +60,30 @@ class ConversationTrimmerTest {
         assertTrue(result.promptTokens <= 80)
     }
 
+    private fun calls(t: String) = ChatMessage(Role.ASSISTANT, t, toolCalls = listOf(ToolCall("f", "{}")))
+    private fun result(t: String) = ChatMessage(Role.TOOL, t, toolName = "f")
+
+    @Test
+    fun currentTurnFromLastUserMessageIsProtected() {
+        val msgs = listOf(
+            sys("s"), // 11
+            user("a".repeat(30)), calls("b"), result("c".repeat(30)), bot("d"), // 40 + 11 + 40 + 11
+            user("q"), calls("e".repeat(40)), result("r".repeat(40)), // 11 + 50 + 50
+        )
+        // Total 224 > 200; the old turn goes (with its tool calls and results), the current one stays.
+        val result = ConversationTrimmer.trim(msgs, ContextBudget(200, 10), count)
+        assertEquals(listOf(sys("s"), user("q"), calls("e".repeat(40)), result("r".repeat(40))), result.messages)
+        assertEquals(122, result.promptTokens)
+    }
+
+    @Test
+    fun historyNeverStartsWithAToolResult() {
+        val msgs = listOf(user("a".repeat(40)), calls("x"), result("y".repeat(10)), user("q"))
+        // 50 + 11 + 20 + 11 = 92 > 90; dropping the first user turn takes its tool result with it.
+        val result = ConversationTrimmer.trim(msgs, ContextBudget(90, 45), count)
+        assertEquals(listOf(user("q")), result.messages)
+    }
+
     @Test
     fun tooLongLastMessageThrows() {
         val msgs = listOf(sys("s"), user("old"), bot("reply"), user("x".repeat(200)))
