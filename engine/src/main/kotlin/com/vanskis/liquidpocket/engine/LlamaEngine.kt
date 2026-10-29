@@ -77,17 +77,10 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     config.mmprojPath?.let { requireReadable(it, "Projector") }
                     val threads = ThreadPolicy.threadsFor(Runtime.getRuntime().availableProcessors())
                     val contextSize = LlamaNative.nativeLoad(modelPath, config.mmprojPath, config.contextSize, threads)
-                    val caps = LlamaNative.nativeCapabilities()
+                    val caps = NativeCapabilities.of(LlamaNative.nativeCapabilities())
                     val ready = EngineState.Ready(modelPath, contextSize)
                     loaded = ready
-                    // Speech output is not supported yet.
-                    _capabilities.value = Capabilities(
-                        vision = caps[0] != 0,
-                        audioIn = caps[1] != 0,
-                        audioOut = false,
-                        audioInSampleRate = caps[2],
-                        audioOutSampleRate = 0,
-                    )
+                    _capabilities.value = caps
                     _state.value = ready
                 } catch (e: CancellationException) {
                     throw e
@@ -153,11 +146,13 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                         if (params.tools.isEmpty()) emptyList() else LFM_TOOL_STARTS
                     },
                 )
+                // Without speech output the reply is text only, as GenerationParams.speak allows.
+                val speaking = params.speak && _capabilities.value.audioOut
                 val counts = native {
                     LlamaNative.nativeBeginReply(
                         p.roles, p.contents, p.toolNames, p.toolCalls,
                         p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
-                        params.temperature,
+                        params.temperature, speaking,
                     )
                 }
                 promptTokens = counts[0]
@@ -177,14 +172,21 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                 while (generated < params.maxNewTokens && !stopRequested) {
                     currentCoroutineContext().ensureActive()
                     val t0 = System.nanoTime()
-                    val bytes = native { LlamaNative.nativeNextToken() } ?: break
+                    val bytes = native { LlamaNative.nativeNextToken() }
                     decodeNanos += System.nanoTime() - t0
+                    // A spoken reply's audio comes with the step that made it, the last one too.
+                    if (speaking) native { LlamaNative.nativeTakeAudio(flush = false) }?.let { emit(ReplyChunk.Audio(it)) }
+                    if (bytes == null) break
+                    // Steps that only made audio return no text and do not count as generated tokens.
+                    if (speaking && bytes.isEmpty()) continue
                     generated++
                     val text = filter.append(utf8.append(bytes))
                     if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
                 }
-                // After stop() the reply is cut short: no tool calls, and no held-back text.
+                // After stop() the reply is cut short: no tool calls, and no held-back text or audio.
                 if (stopRequested) return@withLock
+                // The speech decoder holds back the end of the last frame, also when maxNewTokens cut the reply.
+                if (speaking) native { LlamaNative.nativeTakeAudio(flush = true) }?.let { emit(ReplyChunk.Audio(it)) }
 
                 val parsed = native { LlamaNative.nativeParseReply() }?.map(::utf8)
                 val rest = filter.complete(parsed?.first())
