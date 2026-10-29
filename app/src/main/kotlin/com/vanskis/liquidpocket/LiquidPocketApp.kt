@@ -18,6 +18,9 @@ import java.io.File
 /** The model the app downloads and chats with in M1. */
 val ACTIVE_MODEL = ModelCatalog.LFM3_OMNI_2B
 
+/** The larger text model swapped in for "Think harder"; downloaded the first time it is wanted. */
+val SMART_MODEL = ModelCatalog.LFM25_8B_A1B
+
 /** Holds the process-wide objects the screens and the download worker share. */
 class LiquidPocketApp : Application() {
     val installer: ModelInstaller by lazy { ModelInstaller(File(filesDir, "models")) }

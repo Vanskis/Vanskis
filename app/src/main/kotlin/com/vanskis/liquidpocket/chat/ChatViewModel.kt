@@ -11,6 +11,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.LiquidPocketApp
+import com.vanskis.liquidpocket.SMART_MODEL
+import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.media.Dictation
@@ -65,8 +68,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
     val permissions = PermissionGate(app)
     private val tools = phoneTools(graph, permissions)
-    private val controller =
-        ChatController(graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink)
+    /** Omni stays loaded; the smart model takes its place for one reply, fetched over Wi-Fi the first time. */
+    private val models = object : ModelTargets {
+        override suspend fun resident() = installed(ACTIVE_MODEL)
+        override suspend fun smart() = installed(SMART_MODEL)
+        override fun downloadSmart() = graph.downloads.download(SMART_MODEL, allowMetered = false)
+    }
+
+    private val controller = ChatController(
+        graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink, models = models,
+    )
 
     val state: StateFlow<ChatState> = controller.state
     val engineState: StateFlow<EngineState> = graph.engine.state
@@ -74,6 +85,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Saved conversations for the drawer, newest first. */
     val conversations: StateFlow<List<Conversation>> =
         graph.chats.conversations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The smart model's download, shown while it runs. */
+    val smartDownload: StateFlow<DownloadStatus> =
+        graph.downloads.status(SMART_MODEL).stateIn(viewModelScope, SharingStarted.Eagerly, DownloadStatus.NotDownloaded(0))
+
+    init {
+        // A failed download is reported once, when it fails.
+        viewModelScope.launch {
+            var wasActive = false
+            smartDownload.collect { status ->
+                if (wasActive && status is DownloadStatus.Failed) {
+                    controller.showError("Could not download ${SMART_MODEL.displayName}: ${status.message}")
+                }
+                wasActive = status.active
+            }
+        }
+    }
 
     val speakReplies: StateFlow<Boolean> =
         settings.map { it.speakReplies }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -120,6 +148,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         }
     }
 
+    private suspend fun installed(spec: ModelSpec): LoadTarget? {
+        val (file, mmproj) = withContext(Dispatchers.IO) { graph.installer.installedFile(spec) to graph.installer.installedMmproj(spec) }
+        file ?: return null
+        return LoadTarget(file.path, mmproj?.path, graph.settings.settings.first().contextSize)
+    }
+
     /** Silences the previous reply, so a new one (or the user) is not talked over. */
     private fun silence() {
         player.stop()
@@ -139,6 +173,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     override fun regenerate() {
         silence()
         controller.regenerate(params())
+    }
+
+    override fun thinkHarder() {
+        silence()
+        controller.thinkHarder(params())
     }
 
     override fun editAndResend(text: String) {
