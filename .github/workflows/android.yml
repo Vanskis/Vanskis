@@ -1,0 +1,124 @@
+name: Android
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+
+      - name: Install NDK, CMake and platform
+        run: sdkmanager --install "ndk;29.0.13113456" "cmake;3.31.6" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Without release secrets the APK is signed with the debug key. Keeping that key across runs
+      # lets debug-signed builds update each other instead of needing an uninstall every time.
+      - name: Restore debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Configure release signing
+        env:
+          LP_KEYSTORE_BASE64: ${{ secrets.LP_KEYSTORE_BASE64 }}
+          LP_KEYSTORE_PASSWORD: ${{ secrets.LP_KEYSTORE_PASSWORD }}
+          LP_KEY_ALIAS: ${{ secrets.LP_KEY_ALIAS }}
+          LP_KEY_PASSWORD: ${{ secrets.LP_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LP_KEYSTORE_BASE64" ]; then
+            printf '%s' "$LP_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            {
+              echo "LP_KEYSTORE_PATH=$RUNNER_TEMP/release.jks"
+              echo "LP_KEYSTORE_PASSWORD=$LP_KEYSTORE_PASSWORD"
+              echo "LP_KEY_ALIAS=$LP_KEY_ALIAS"
+              echo "LP_KEY_PASSWORD=$LP_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Release signing configured."
+          else
+            echo "::warning::LP_KEYSTORE_BASE64 is not set; the APK is debug-signed."
+          fi
+
+      - name: Gradle build (tests and release APK)
+        env:
+          LP_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew --no-daemon :core:test :engine:testReleaseUnitTest :app:testReleaseUnitTest :app:assembleRelease
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: ignore
+
+      - name: Rename APK
+        id: apk
+        run: |
+          src=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          mkdir -p dist
+          dest="dist/liquid-pocket-${{ github.run_number }}.apk"
+          cp "$src" "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "tag=latest-${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquid-pocket-apk
+          path: ${{ steps.apk.outputs.path }}
+
+      # One rolling prerelease per branch: drop the previous release (and its old APKs), move the
+      # tag to this commit, then publish. Re-runs end in the same state.
+      - name: Move prerelease tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.apk.outputs.tag }}
+        run: |
+          gh release delete "$TAG" --yes || true
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.apk.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Liquid Pocket ${{ github.ref_name }} (build ${{ github.run_number }})
+          prerelease: true
+          files: ${{ steps.apk.outputs.path }}
+          body: |
+            Latest build of `${{ github.ref_name }}`.
+
+            Commit: ${{ github.sha }}
+            Version: 0.1.${{ github.run_number }}
+
+            Open this page in the phone's browser and tap the APK to install.
