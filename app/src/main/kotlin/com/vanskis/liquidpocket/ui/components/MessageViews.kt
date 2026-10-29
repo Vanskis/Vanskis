@@ -134,22 +134,6 @@ fun AssistantMessage(
     }
 }
 
-/** A tool's result, muted: the model reads it, the user rarely needs to. */
-@Composable
-fun ToolMessage(toolName: String?, text: String, modifier: Modifier = Modifier) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(toolName?.let { "Tool result · $it" } ?: "Tool result", style = MaterialTheme.typography.labelMedium)
-            Text(text, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), maxLines = 6)
-        }
-    }
-}
-
 /** "24.5 tok/s · 312 tokens" under a reply. */
 @Composable
 fun StatsLine(stats: GenerationStats, modifier: Modifier = Modifier) {

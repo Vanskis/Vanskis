@@ -149,7 +149,7 @@ class ChatControllerTest {
     private val sink = RecordingSink()
     private val params = GenerationParams()
 
-    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), media, sink)
+    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), media = media, sink = sink)
 
     private val omni = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
 

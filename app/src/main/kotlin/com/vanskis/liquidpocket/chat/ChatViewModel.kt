@@ -18,6 +18,8 @@ import com.vanskis.liquidpocket.media.ReplyAudioPlayer
 import com.vanskis.liquidpocket.media.ReplySpeaker
 import com.vanskis.liquidpocket.media.VoiceRecorder
 import com.vanskis.liquidpocket.settings.AppSettings
+import com.vanskis.liquidpocket.tools.PermissionGate
+import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,8 +62,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         }
     }
 
+    /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
+    val permissions = PermissionGate(app)
+    private val tools = phoneTools(graph, permissions)
     private val controller =
-        ChatController(graph.engine, graph.chats, viewModelScope, Dispatchers.IO, media = graph.media, sink = sink)
+        ChatController(graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink)
 
     val state: StateFlow<ChatState> = controller.state
     val engineState: StateFlow<EngineState> = graph.engine.state
@@ -96,6 +101,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         val s = settings.value
         return GenerationParams(
             temperature = s.temperature,
+            tools = tools.map { it.spec },
             speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine, graph.engine.capabilities.value),
         )
     }
@@ -160,6 +166,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     override fun deleteConversation(id: Long) = controller.deleteConversation(id)
 
     override fun dismissError() = controller.dismissError()
+
+    override fun approveTool() = controller.approveTool()
+
+    override fun declineTool() = controller.declineTool()
 
     /** Reports a problem the screen ran into (a denied permission, no camera app). */
     fun showError(message: String) = controller.showError(message)

@@ -59,6 +59,15 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
 
     LaunchedEffect(Unit) { vm.onChatOpened() }
 
+    // A tool asks for a permission the first time it needs it; the answer goes back to the tool.
+    val permissionRequest by vm.permissions.request.collectAsStateWithLifecycle()
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        vm.permissions.onResult()
+    }
+    LaunchedEffect(permissionRequest) {
+        permissionRequest?.let { if (it.markLaunched()) permissionLauncher.launch(it.permissions.toTypedArray()) }
+    }
+
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.attachPhoto(uri)
     }

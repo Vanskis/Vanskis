@@ -32,10 +32,16 @@ object SystemPrompt {
         return facts.size
     }
 
-    fun build(facts: List<String>): String {
+    /** Said when tools are offered. */
+    const val TOOLS_LINE =
+        "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
+            "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them."
+
+    fun build(facts: List<String>, tools: Boolean = false): String {
+        val base = if (tools) "$SYSTEM_PROMPT\n$TOOLS_LINE" else SYSTEM_PROMPT
         val used = normalize(facts.take(fittingCount(facts)))
-        if (used.isEmpty()) return SYSTEM_PROMPT
-        return SYSTEM_PROMPT + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }
+        if (used.isEmpty()) return base
+        return base + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }
     }
 
     private val WHITESPACE = Regex("\\s+")

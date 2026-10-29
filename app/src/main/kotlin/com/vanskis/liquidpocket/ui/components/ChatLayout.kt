@@ -61,6 +61,10 @@ interface ChatActions {
     fun renameConversation(id: Long, title: String)
     fun deleteConversation(id: Long)
     fun dismissError()
+
+    /** Answers the tool call waiting in [ChatState.confirmation]. */
+    fun approveTool()
+    fun declineTool()
 }
 
 /** The chat screen: the conversation drawer around the top bar, the messages and the composer. */
@@ -197,6 +201,8 @@ fun ChatLayout(
                         input = text
                         editing = true
                     },
+                    onApproveTool = actions::approveTool,
+                    onDeclineTool = actions::declineTool,
                 )
             }
         }
@@ -216,6 +222,8 @@ private fun MessageList(
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
     onEdit: (String) -> Unit,
+    onApproveTool: () -> Unit,
+    onDeclineTool: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(rows) { listState.animateScrollToItem(0) }
@@ -238,9 +246,14 @@ private fun MessageList(
             val index = rows - 1 - row
             val turn = turns.getOrNull(index)
             val isLast = index == turns.lastIndex
-            val user = turn?.takeIf { it.role == Role.USER }
+            val user = turn?.takeIf { it.role == Role.USER && !it.fromTool }
             val tool = turn?.takeIf { it.role != Role.USER && it.role != Role.ASSISTANT }
+            val confirmation = state.confirmation
             when {
+                turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
+                // A reply that only called tools: its tool turns that follow show what happened.
+                turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() -> Unit
+                turn == null && confirmation != null -> ToolConfirmationCard(confirmation, onApproveTool, onDeclineTool)
                 user != null -> {
                     val newest = idle && index == state.lastUserIndex
                     UserMessage(
