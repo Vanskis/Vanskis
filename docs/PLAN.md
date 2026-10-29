@@ -44,3 +44,17 @@ from the research session.
 - **LEAP support for LFM3.** Not confirmed, which is why llama.cpp is the primary runtime.
 - **Third-party NPU access on the S26 Ultra.** Not confirmed, so the NPU is deferred.
 - **License.** LFM Open License v1.0: free below $10M annual revenue. Personal use is fine.
+
+## M2–M4 build-out (all at once)
+
+The `Engine` contract (engine/.../Engine.kt) was extended first so the engine and app work can
+proceed in parallel: `capabilities`, `EngineConfig.mmprojPath`, images/audio/tool calls on
+`ChatMessage`, `GenerationParams.tools`/`speak`, and `chat()` streaming `ReplyChunk`s.
+
+llama.cpp at the pin has everything native needs in `tools/mtmd`: image and audio input
+(`mtmd_tokenize`, `mtmd_helper_eval_chunks`) and LFM3 speech output (`mtmd_gen_*`,
+`MTMD_GEN_AUDIO_TYPE_LFM3A`; the server's realtime endpoint is the reference). Tool calls use the
+LFM3 template's `<tool_call><function=…><parameter=…>` format, parsed by `common_chat_parse`.
+
+Waves: (1) engine multimodal input + tools, core mmproj download + 8B offered, app Room history
+and UI polish; (2) engine speech output, app tools + memory + 8B swap, app camera/photos/voice.
