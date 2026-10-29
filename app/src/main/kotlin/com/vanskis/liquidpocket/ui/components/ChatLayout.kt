@@ -1,0 +1,272 @@
+package com.vanskis.liquidpocket.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.chat.ChatState
+import com.vanskis.liquidpocket.chat.Conversation
+import com.vanskis.liquidpocket.chat.ModelStatus
+import com.vanskis.liquidpocket.engine.Role
+import kotlinx.coroutines.launch
+
+/** What the chat screen can ask for; the view model implements it. */
+interface ChatActions {
+    fun send(text: String)
+    fun stop()
+    fun regenerate()
+    fun editAndResend(text: String)
+    fun newChat()
+    fun openConversation(id: Long)
+    fun renameConversation(id: Long, title: String)
+    fun deleteConversation(id: Long)
+    fun dismissError()
+}
+
+/** The chat screen: the conversation drawer around the top bar, the messages and the composer. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatLayout(
+    state: ChatState,
+    status: ModelStatus,
+    modelName: String,
+    conversations: List<Conversation>,
+    actions: ChatActions,
+    onCopy: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    var input by rememberSaveable { mutableStateOf("") }
+    var editing by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(state.error) {
+        state.error?.let { snackbar.showSnackbar(it); actions.dismissError() }
+    }
+
+    val ready = status == ModelStatus.Ready && !state.loading && !state.generating
+    // Editing applies to the newest user turn; it lapses if that turn goes away.
+    val isEditing = editing && state.lastUserIndex >= 0 && !state.generating
+    val canSend = ready && input.isNotBlank()
+
+    fun closeDrawerThen(action: () -> Unit) {
+        editing = false
+        action()
+        scope.launch { drawerState.close() }
+    }
+
+    fun submit() {
+        if (isEditing) actions.editAndResend(input) else actions.send(input)
+        input = ""
+        editing = false
+    }
+
+    val title = conversations.firstOrNull { it.id == state.conversationId }?.title ?: "Liquid Pocket"
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(drawerState = drawerState) {
+                ConversationDrawer(
+                    conversations = conversations,
+                    selectedId = state.conversationId,
+                    onNewChat = { closeDrawerThen(actions::newChat) },
+                    onOpen = { id -> closeDrawerThen { actions.openConversation(id) } },
+                    onRename = actions::renameConversation,
+                    onDelete = actions::deleteConversation,
+                )
+            }
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                Column {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                ModelStatusLine(status, modelName)
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Filled.Menu, contentDescription = "Chats")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { editing = false; actions.newChat() }) {
+                                Icon(Icons.Filled.Add, contentDescription = "New chat")
+                            }
+                            IconButton(onClick = onOpenSettings) {
+                                Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                            }
+                        },
+                    )
+                    if (status == ModelStatus.Loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            },
+            bottomBar = {
+                Composer(
+                    value = input,
+                    onValueChange = { input = it },
+                    canSend = canSend,
+                    generating = state.generating,
+                    onSend = ::submit,
+                    onStop = actions::stop,
+                    editing = isEditing,
+                    onCancelEdit = { editing = false; input = "" },
+                )
+            },
+            snackbarHost = { SnackbarHost(snackbar) },
+        ) { padding ->
+            val rows = state.turns.size + if (state.generating) 1 else 0
+            if (rows == 0) {
+                EmptyState(
+                    modelName = modelName,
+                    onSuggestion = { suggestion -> if (ready) actions.send(suggestion) else input = suggestion },
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                )
+            } else {
+                MessageList(
+                    state = state,
+                    rows = rows,
+                    contentPadding = padding,
+                    onCopy = onCopy,
+                    onRegenerate = actions::regenerate,
+                    onEdit = { text ->
+                        input = text
+                        editing = true
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Newest message at the bottom; the list is reversed so a growing reply stays anchored above the
+ * composer. Row keys are turn indices, and the streaming reply takes the index it will be saved at,
+ * so its Markdown is not parsed again from scratch when it completes.
+ */
+@Composable
+private fun MessageList(
+    state: ChatState,
+    rows: Int,
+    contentPadding: PaddingValues,
+    onCopy: (String) -> Unit,
+    onRegenerate: () -> Unit,
+    onEdit: (String) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(rows) { listState.animateScrollToItem(0) }
+    val turns = state.turns
+    val idle = !state.generating && !state.loading
+
+    LazyColumn(
+        state = listState,
+        reverseLayout = true,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = contentPadding.calculateTopPadding() + 12.dp,
+            bottom = contentPadding.calculateBottomPadding() + 12.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(count = rows, key = { row -> rows - 1 - row }) { row ->
+            val index = rows - 1 - row
+            val turn = turns.getOrNull(index)
+            val isLast = index == turns.lastIndex
+            val user = turn?.takeIf { it.role == Role.USER }
+            val tool = turn?.takeIf { it.role != Role.USER && it.role != Role.ASSISTANT }
+            when {
+                user != null -> {
+                    val newest = idle && index == state.lastUserIndex
+                    UserMessage(
+                        text = user.text,
+                        onEdit = if (newest) ({ onEdit(user.text) }) else null,
+                        // A user turn with no reply after it: the reply failed or was stopped before its first token.
+                        onRetry = if (newest && isLast) onRegenerate else null,
+                    )
+                }
+                tool != null -> ToolMessage(tool.toolName, tool.text)
+                // One call site for the streaming and the saved reply, so its Markdown state carries over.
+                else -> {
+                    val text = turn?.text ?: state.streaming.orEmpty()
+                    AssistantMessage(
+                        text = text,
+                        streaming = turn == null,
+                        stats = turn?.stats,
+                        onCopy = { onCopy(text) },
+                        onRegenerate = if (idle && isLast && state.lastUserIndex >= 0) onRegenerate else null,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** "● LFM3-Omni-2B · Ready" under the title. */
+@Composable
+private fun ModelStatusLine(status: ModelStatus, modelName: String) {
+    val colors = MaterialTheme.colorScheme
+    val (label, dot) = when (status) {
+        ModelStatus.Ready -> "Ready" to Color(0xFF2E7D32)
+        ModelStatus.Loading -> "Loading…" to colors.tertiary
+        ModelStatus.NotLoaded -> "Not loaded" to colors.outline
+        is ModelStatus.Error -> "Error" to colors.error
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(8.dp).background(dot, CircleShape))
+        Text(
+            "$modelName · $label",
+            style = MaterialTheme.typography.labelMedium,
+            color = colors.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+    }
+}

@@ -23,4 +23,6 @@ buildscript {
 plugins {
     // Loads the Kotlin Gradle plugin once for all modules (kotlin.jvm and kotlin.android).
     alias(libs.plugins.kotlin.jvm) apply false
+    // Room's annotation processor in :app; from the Gradle Plugin Portal.
+    alias(libs.plugins.ksp) apply false
 }

@@ -3,6 +3,8 @@ package com.vanskis.liquidpocket
 import android.app.Application
 import com.vanskis.liquidpocket.core.ModelCatalog
 import com.vanskis.liquidpocket.core.ModelInstaller
+import com.vanskis.liquidpocket.data.AppDatabase
+import com.vanskis.liquidpocket.data.ChatRepository
 import com.vanskis.liquidpocket.download.ModelDownloads
 import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.Engines
@@ -18,4 +20,6 @@ class LiquidPocketApp : Application() {
     val downloads: ModelDownloads by lazy { ModelDownloads(this, installer) }
     val settings: SettingsRepository by lazy { SettingsRepository(this) }
     val engine: Engine by lazy { Engines.llama(this) }
+    val database: AppDatabase by lazy { AppDatabase.create(this) }
+    val chats: ChatRepository by lazy { ChatRepository(database.chatDao()) }
 }
