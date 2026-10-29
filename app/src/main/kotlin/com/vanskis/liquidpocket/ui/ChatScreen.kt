@@ -3,6 +3,8 @@ package com.vanskis.liquidpocket.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +24,15 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val context = LocalContext.current
 
     LaunchedEffect(Unit) { vm.onChatOpened() }
+
+    // A tool asks for a permission the first time it needs it; the answer goes back to the tool.
+    val permissionRequest by vm.permissions.request.collectAsStateWithLifecycle()
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        vm.permissions.onResult()
+    }
+    LaunchedEffect(permissionRequest) {
+        permissionRequest?.let { if (it.markLaunched()) permissionLauncher.launch(it.permissions.toTypedArray()) }
+    }
 
     ChatLayout(
         state = state,

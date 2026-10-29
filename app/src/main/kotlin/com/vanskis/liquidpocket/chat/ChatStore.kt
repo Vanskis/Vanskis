@@ -1,6 +1,7 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.engine.GenerationStats
+import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 
@@ -13,9 +14,17 @@ data class Turn(
     val attachments: List<Attachment> = emptyList(),
     /** ASSISTANT turns: the tool calls the model made. */
     val toolCalls: List<ToolCall> = emptyList(),
-    /** TOOL turns: the tool whose result [text] is. */
+    /**
+     * TOOL turns: the tool whose result [text] is. USER turns: set when the app wrote the turn to
+     * hand the model what that tool returned (photos), see [fromTool].
+     */
     val toolName: String? = null,
-)
+    /** Pixels sent with a [fromTool] turn. Kept in memory only, not saved. */
+    val images: List<ImageInput> = emptyList(),
+) {
+    /** A user turn the app added for a tool, not one the user wrote. */
+    val fromTool: Boolean get() = role == Role.USER && toolName != null
+}
 
 enum class AttachmentKind { IMAGE, AUDIO }
 

@@ -8,6 +8,8 @@ import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.settings.AppSettings
+import com.vanskis.liquidpocket.tools.PermissionGate
+import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,7 +22,10 @@ import kotlinx.coroutines.withContext
 /** Holds the open conversation for the Chat screen; it survives visits to Settings and Setup. */
 class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val graph = app as LiquidPocketApp
-    private val controller = ChatController(graph.engine, graph.chats, viewModelScope, Dispatchers.IO)
+    /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
+    val permissions = PermissionGate(app)
+    private val tools = phoneTools(graph, permissions)
+    private val controller = ChatController(graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools)
 
     val state: StateFlow<ChatState> = controller.state
     val engineState: StateFlow<EngineState> = graph.engine.state
@@ -32,7 +37,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val settings: StateFlow<AppSettings> =
         graph.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
-    private fun params() = GenerationParams(temperature = settings.value.temperature)
+    private fun params() = GenerationParams(temperature = settings.value.temperature, tools = tools.map { it.spec })
 
     /** Called each time the Chat screen opens; loads (or reloads, after a context change) the model. */
     fun onChatOpened() {
@@ -70,4 +75,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     override fun deleteConversation(id: Long) = controller.deleteConversation(id)
 
     override fun dismissError() = controller.dismissError()
+
+    override fun approveTool() = controller.approveTool()
+
+    override fun declineTool() = controller.declineTool()
 }

@@ -54,3 +54,13 @@ data class FactEntity(
     val text: String,
     val createdAt: Long,
 )
+
+/** A note the assistant saved for the user (the create_note tool). Added in database version 2. */
+@Entity(tableName = "notes")
+data class NoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val text: String,
+    /** Epoch milliseconds. */
+    val createdAt: Long,
+)
