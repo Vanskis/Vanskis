@@ -31,12 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.chat.Attachment
 
 /**
  * The message field with Send (or Stop, while a reply streams).
  *
- * [attachmentActions] is the slot just left of Send for future attach, camera and mic buttons; it is
- * empty for now. It sits outside the text field so its buttons keep their size as the field grows.
+ * [attachmentActions] is the slot just left of Send for the photo, camera and mic buttons. It sits
+ * outside the text field so its buttons keep their size as the field grows. [pending] attachments
+ * show above the field, each with a remove button.
  */
 @Composable
 fun Composer(
@@ -50,6 +52,8 @@ fun Composer(
     editing: Boolean = false,
     onCancelEdit: () -> Unit = {},
     attachmentActions: @Composable RowScope.() -> Unit = {},
+    pending: List<Attachment> = emptyList(),
+    onRemovePending: (Attachment) -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
         Column(
@@ -79,6 +83,7 @@ fun Composer(
                     TextButton(onClick = onCancelEdit) { Text("Cancel") }
                 }
             }
+            if (pending.isNotEmpty()) PendingAttachments(pending, onRemovePending, modifier = Modifier.padding(start = 4.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 TextField(
                     value = value,

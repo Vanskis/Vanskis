@@ -1,11 +1,14 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.engine.AudioInput
+import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
 import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.EngineConfig
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
+import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import kotlinx.coroutines.CancellationException
@@ -45,12 +48,15 @@ data class ChatState(
  *
  * [work] runs model loading and the token stream off the caller's (main) thread. Each operation
  * that touches [store] waits for the previous one, so writes land in the order they were made.
+ * [media] decodes attachments for the engine; [sink] gets the reply's speech and its end.
  */
 class ChatController(
     private val engine: Engine,
     private val store: ChatStore,
     private val scope: CoroutineScope,
     private val work: CoroutineDispatcher,
+    private val media: MediaLoader = MediaLoader.NONE,
+    private val sink: ReplySink = ReplySink.NONE,
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -91,12 +97,16 @@ class ChatController(
         }
     }
 
-    /** Appends a user turn and streams the reply. Ignored while loading or generating. */
-    fun send(text: String, params: GenerationParams) {
+    /**
+     * Appends a user turn with [attachments] and streams the reply. Ignored (false) while loading or
+     * generating, or with neither text nor attachments.
+     */
+    fun send(text: String, params: GenerationParams, attachments: List<Attachment> = emptyList()): Boolean {
         val prompt = text.trim()
         val now = _state.value
-        if (prompt.isEmpty() || busy(now)) return
-        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt), params = params)
+        if ((prompt.isEmpty() && attachments.isEmpty()) || busy(now)) return false
+        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments), params = params)
+        return true
     }
 
     /** Replaces the reply to the newest user turn (or adds one, if it has none) with a new one. */
@@ -175,7 +185,7 @@ class ChatController(
             try {
                 persist {
                     val id = conversationId
-                        ?: store.createConversation(ConversationTitle.from(turns.first { it.role == Role.USER }.text))
+                        ?: store.createConversation(ConversationTitle.from(turns.first { it.role == Role.USER }.titleText()))
                     conversationId = id
                     if (dropped) store.truncate(id, keep)
                     if (newUser != null) store.appendTurn(id, newUser)
@@ -183,8 +193,11 @@ class ChatController(
                 _state.update { it.copy(conversationId = conversationId) }
                 if (stopRequested) return@after
                 val facts = persist { store.factTexts() }.orEmpty()
-                val history = listOf(ChatMessage(Role.SYSTEM, SystemPrompt.build(facts))) + turns.map { it.toMessage() }
-                engine.chat(history, params)
+                val caps = engine.capabilities.value
+                val history = withContext(work) {
+                    listOf(ChatMessage(Role.SYSTEM, SystemPrompt.build(facts))) + turns.map { it.toMessage(caps) }
+                }
+                engine.chat(history, params.copy(speak = params.speak && caps.audioOut))
                     // Caught before flowOn so text already buffered still arrives after a failure.
                     .catch { e ->
                         if (e is CancellationException) throw e
@@ -192,9 +205,11 @@ class ChatController(
                     }
                     .flowOn(work)
                     .collect { chunk ->
-                        // Audio and tool calls are for later milestones.
-                        if (chunk is ReplyChunk.Text) {
-                            _state.update { it.copy(streaming = (it.streaming ?: "") + chunk.text) }
+                        when (chunk) {
+                            is ReplyChunk.Text -> _state.update { it.copy(streaming = (it.streaming ?: "") + chunk.text) }
+                            is ReplyChunk.Audio -> sink.audio(chunk.samples)
+                            // Tool calls are for a later milestone.
+                            is ReplyChunk.ToolCall -> Unit
                         }
                     }
             } catch (e: CancellationException) {
@@ -213,6 +228,7 @@ class ChatController(
                         error = failure ?: it.error,
                     )
                 }
+                if (replyTurn != null) sink.finished(text, completed = failure == null && !stopRequested)
                 val id = conversationId
                 if (replyTurn != null && id != null) {
                     withContext(NonCancellable) { persist { store.appendTurn(id, replyTurn) } }
@@ -247,6 +263,49 @@ class ChatController(
             null
         }
 
-    // Attachments are not sent yet: the engine takes decoded pixels and samples, a later milestone.
-    private fun Turn.toMessage() = ChatMessage(role, text, toolCalls = toolCalls, toolName = toolName)
+    /** Names a conversation that starts with only a photo or a voice message. */
+    private fun Turn.titleText(): String = text.ifBlank {
+        when (attachments.firstOrNull()?.kind) {
+            AttachmentKind.IMAGE -> "Photo"
+            AttachmentKind.AUDIO -> "Voice message"
+            null -> text
+        }
+    }
+
+    /**
+     * A user turn's attachments become decoded images and audio the model takes; media it cannot
+     * take, or whose file is gone, becomes a note in the text so the engine is never given it.
+     */
+    private fun Turn.toMessage(caps: Capabilities): ChatMessage {
+        if (role != Role.USER || attachments.isEmpty()) {
+            return ChatMessage(role, text, toolCalls = toolCalls, toolName = toolName)
+        }
+        val images = mutableListOf<ImageInput>()
+        val audio = mutableListOf<AudioInput>()
+        val notes = mutableListOf<String>()
+        for (attachment in attachments) {
+            when (attachment.kind) {
+                AttachmentKind.IMAGE -> when {
+                    !caps.vision -> notes += MediaNotes.IMAGE_UNSUPPORTED
+                    else -> loadOrNull { media.image(attachment.path) }?.let { images += it } ?: run { notes += MediaNotes.IMAGE_MISSING }
+                }
+                AttachmentKind.AUDIO -> when {
+                    !caps.audioIn -> notes += MediaNotes.AUDIO_UNSUPPORTED
+                    else -> loadOrNull { media.audio(attachment.path, caps.audioInSampleRate) }?.let { audio += it }
+                        ?: run { notes += MediaNotes.AUDIO_MISSING }
+                }
+            }
+        }
+        val content = (listOf(text) + notes.distinct()).filter { it.isNotBlank() }.joinToString("\n\n")
+        return ChatMessage(role, content, images = images, audio = audio)
+    }
+
+    private inline fun <T> loadOrNull(load: () -> T): T? =
+        try {
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 }

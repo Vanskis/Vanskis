@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.LiquidPocketApp
+import com.vanskis.liquidpocket.chat.VoiceEngine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -25,5 +26,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setDynamicColor(value: Boolean) {
         viewModelScope.launch { repo.setDynamicColor(value) }
+    }
+
+    fun setSpeakReplies(value: Boolean) {
+        viewModelScope.launch { repo.setSpeakReplies(value) }
+    }
+
+    fun setVoiceEngine(value: VoiceEngine) {
+        viewModelScope.launch { repo.setVoiceEngine(value) }
     }
 }

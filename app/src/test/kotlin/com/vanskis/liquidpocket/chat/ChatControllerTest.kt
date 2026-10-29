@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
+import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
 import com.vanskis.liquidpocket.engine.Engine
@@ -8,6 +9,7 @@ import com.vanskis.liquidpocket.engine.EngineException
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.engine.GenerationStats
+import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
@@ -43,6 +45,9 @@ class ChatControllerTest {
         var chatFailure: Exception? = null
         var publishStats = true
         var sent: List<ChatMessage>? = null
+        var sentParams: GenerationParams? = null
+        /** Speech emitted before the text, as a speaking model would. */
+        var speech: List<FloatArray> = emptyList()
         var chats = 0
         var tokens = Channel<String>(Channel.UNLIMITED)
 
@@ -58,10 +63,12 @@ class ChatControllerTest {
 
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
             sent = messages
+            sentParams = params
             chats++
             val ready = state.value
             state.value = EngineState.Generating
             try {
+                speech.forEach { emit(ReplyChunk.Audio(it)) }
                 for (t in tokens) emit(ReplyChunk.Text(t))
                 // Like the real engine, tool calls come once the text ends; they are not reply text.
                 emit(ReplyChunk.ToolCall(ToolCall("noop", "{}")))
@@ -115,11 +122,36 @@ class ChatControllerTest {
         override suspend fun factTexts(): List<String> = facts.toList()
     }
 
+    /** Decodes nothing: each path maps to a fixed input, a path it does not know is a missing file. */
+    private class FakeMedia : MediaLoader {
+        val images = mutableMapOf<String, ImageInput>()
+        val clips = mutableMapOf<String, AudioInput>()
+        val audioRates = mutableListOf<Int>()
+
+        override fun image(path: String) = images[path] ?: throw java.io.FileNotFoundException(path)
+
+        override fun audio(path: String, sampleRate: Int): AudioInput {
+            audioRates += sampleRate
+            return clips[path] ?: throw java.io.FileNotFoundException(path)
+        }
+    }
+
+    private class RecordingSink : ReplySink {
+        val audio = mutableListOf<FloatArray>()
+        val finished = mutableListOf<Pair<String, Boolean>>()
+        override fun audio(samples: FloatArray) { audio += samples }
+        override fun finished(text: String, completed: Boolean) { finished += text to completed }
+    }
+
     private val engine = FakeEngine()
     private val store = FakeStore()
+    private val media = FakeMedia()
+    private val sink = RecordingSink()
     private val params = GenerationParams()
 
-    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler))
+    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), media, sink)
+
+    private val omni = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
 
     /** Sends [text] and lets the engine answer [reply] in full. */
     private fun TestScope.exchange(c: ChatController, text: String, reply: String) {
@@ -470,5 +502,121 @@ class ChatControllerTest {
         assertEquals(0, engine.chats)
         assertFalse(c.state.value.generating)
         assertEquals(listOf("hi"), c.state.value.turns.map { it.text })
+    }
+
+    @Test fun `attachments are sent to the engine as images and audio on the user message`() = runTest {
+        engine.capabilities.value = omni
+        val photo = ImageInput(1, 1, byteArrayOf(1, 2, 3))
+        val clip = AudioInput(floatArrayOf(0.5f))
+        media.images["/a/p.jpg"] = photo
+        media.clips["/a/v.wav"] = clip
+        val c = controller()
+        c.ready()
+        engine.reply("A cat")
+        val attachments = listOf(Attachment("/a/p.jpg", AttachmentKind.IMAGE), Attachment("/a/v.wav", AttachmentKind.AUDIO))
+        assertTrue(c.send("what is this?", params, attachments))
+        advanceUntilIdle()
+
+        val user = engine.sent!!.last()
+        assertEquals("what is this?", user.content)
+        assertEquals(listOf(photo), user.images)
+        assertEquals(listOf(clip), user.audio)
+        assertEquals(listOf(16000), media.audioRates)
+        assertEquals(attachments, c.state.value.turns[0].attachments)
+        assertEquals(attachments, store.saved.getValue(1L)[0].attachments)
+    }
+
+    @Test fun `media the model cannot take is dropped with a note`() = runTest {
+        engine.capabilities.value = Capabilities.NONE
+        media.images["/a/p.jpg"] = ImageInput(1, 1, byteArrayOf(1, 2, 3))
+        media.clips["/a/v.wav"] = AudioInput(floatArrayOf(0f))
+        val c = controller()
+        c.ready()
+        engine.reply("ok")
+        c.send("hi", params, listOf(Attachment("/a/p.jpg", AttachmentKind.IMAGE), Attachment("/a/v.wav", AttachmentKind.AUDIO)))
+        advanceUntilIdle()
+
+        val user = engine.sent!!.last()
+        assertTrue(user.images.isEmpty() && user.audio.isEmpty())
+        assertEquals("hi\n\n${MediaNotes.IMAGE_UNSUPPORTED}\n\n${MediaNotes.AUDIO_UNSUPPORTED}", user.content)
+        assertTrue(media.audioRates.isEmpty())
+    }
+
+    @Test fun `an attachment whose file is gone becomes a note`() = runTest {
+        engine.capabilities.value = omni
+        val c = controller()
+        c.ready()
+        engine.reply("ok")
+        c.send("", params, listOf(Attachment("/gone.jpg", AttachmentKind.IMAGE)))
+        advanceUntilIdle()
+
+        val user = engine.sent!!.last()
+        assertEquals(MediaNotes.IMAGE_MISSING, user.content)
+        assertTrue(user.images.isEmpty())
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `a message with only an attachment is sent and names the chat`() = runTest {
+        engine.capabilities.value = omni
+        media.clips["/a/v.wav"] = AudioInput(floatArrayOf(0f))
+        val c = controller()
+        c.ready()
+        assertFalse(c.send("  ", params))
+        engine.reply("Hi")
+        assertTrue(c.send("  ", params, listOf(Attachment("/a/v.wav", AttachmentKind.AUDIO))))
+        advanceUntilIdle()
+
+        assertEquals("Voice message", store.titles.getValue(1L))
+        assertEquals(listOf(Role.USER, Role.ASSISTANT), c.state.value.turns.map { it.role })
+    }
+
+    @Test fun `speech chunks reach the sink and the finished reply is reported`() = runTest {
+        engine.capabilities.value = omni
+        val a = floatArrayOf(0.1f, 0.2f)
+        val b = floatArrayOf(0.3f)
+        engine.speech = listOf(a, b)
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+
+        assertEquals(listOf(a, b), sink.audio)
+        assertEquals(listOf("Hello" to true), sink.finished)
+        assertEquals("Hello", c.state.value.turns.last().text)
+    }
+
+    @Test fun `a stopped reply is reported as not completed`() = runTest {
+        val c = controller()
+        c.ready()
+        c.send("hi", params)
+        engine.tokens.send("Hel")
+        runCurrent()
+        c.stop()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Hel" to false), sink.finished)
+    }
+
+    @Test fun `speak is passed only when the model can speak`() = runTest {
+        val c = controller()
+        c.ready()
+        engine.capabilities.value = omni.copy(audioOut = false, audioOutSampleRate = 0)
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("a")
+        c.send("hi", GenerationParams(speak = true))
+        advanceUntilIdle()
+        assertEquals(false, engine.sentParams!!.speak)
+
+        engine.capabilities.value = omni
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("b")
+        c.send("again", GenerationParams(speak = true))
+        advanceUntilIdle()
+        assertEquals(true, engine.sentParams!!.speak)
+
+        engine.tokens = Channel(Channel.UNLIMITED)
+        engine.reply("c")
+        c.send("quiet", GenerationParams(speak = false))
+        advanceUntilIdle()
+        assertEquals(false, engine.sentParams!!.speak)
     }
 }
