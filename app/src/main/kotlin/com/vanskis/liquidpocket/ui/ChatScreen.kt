@@ -1,39 +1,156 @@
 package com.vanskis.liquidpocket.ui
 
+import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.chat.ChatViewModel
+import com.vanskis.liquidpocket.chat.ModelStatus
 import com.vanskis.liquidpocket.chat.modelStatus
+import com.vanskis.liquidpocket.media.AndroidMediaLoader
+import com.vanskis.liquidpocket.ui.components.AttachmentButtons
 import com.vanskis.liquidpocket.ui.components.ChatLayout
+import com.vanskis.liquidpocket.ui.components.ChatMediaUi
+import com.vanskis.liquidpocket.ui.components.LocalImageThumbnail
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/** Long side of the decoded thumbnails; enough for the 200 dp single-photo bubble. */
+private const val THUMBNAIL_SIDE = 400
 
 @Composable
 fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val engineState by vm.engineState.collectAsStateWithLifecycle()
     val conversations by vm.conversations.collectAsStateWithLifecycle()
+    val pending by vm.pending.collectAsStateWithLifecycle()
+    val speakReplies by vm.speakReplies.collectAsStateWithLifecycle()
+    val recordingMillis by vm.recordingMillis.collectAsStateWithLifecycle()
+    val transcript by vm.transcript.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
 
     LaunchedEffect(Unit) { vm.onChatOpened() }
 
-    ChatLayout(
-        state = state,
-        status = modelStatus(engineState, state),
-        modelName = ACTIVE_MODEL.displayName,
-        conversations = conversations,
-        actions = vm,
-        // Android 13+ shows its own confirmation when something is copied, so no snackbar here.
-        onCopy = { text ->
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("Liquid Pocket reply", text))
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.attachPhoto(uri)
+    }
+    // Saved, as the camera app may outlive this activity.
+    var capturePath by rememberSaveable { mutableStateOf<String?>(null) }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+        capturePath?.let { vm.onCameraResult(it, taken) }
+        capturePath = null
+    }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.toggleMic() else vm.showError("Voice input needs the microphone. You can allow it in the app's settings.")
+    }
+
+    val status = modelStatus(engineState, state)
+    val media = ChatMediaUi(
+        pending = pending,
+        onRemovePending = vm::removePending,
+        attachmentActions = {
+            AttachmentButtons(
+                enabled = status == ModelStatus.Ready && !state.loading,
+                onPickPhoto = {
+                    pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onTakePhoto = if (!hasCamera) null else fun() {
+                    val (file, uri) = vm.newCameraCapture()
+                    capturePath = file.path
+                    try {
+                        takePhoto.launch(uri)
+                    } catch (e: ActivityNotFoundException) {
+                        capturePath = null
+                        vm.onCameraResult(file.path, taken = false)
+                        vm.showError("No camera app is available.")
+                    }
+                },
+                onMic = {
+                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED
+                    // A tap while recording stops it; otherwise the permission is asked for on first use.
+                    if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+                },
+                recordingMillis = recordingMillis,
+            )
         },
-        onOpenSettings = onOpenSettings,
+        transcript = transcript,
+        onTranscriptUsed = vm::transcriptUsed,
+        speakReplies = speakReplies,
+        onToggleSpeakReplies = vm::toggleSpeakReplies,
     )
+
+    val placeholder = LocalImageThumbnail.current
+    val thumbnail = remember(placeholder) {
+        @Composable { path: String, modifier: Modifier -> ImageThumbnail(path, modifier, placeholder) }
+    }
+    CompositionLocalProvider(LocalImageThumbnail provides thumbnail) {
+        ChatLayout(
+            state = state,
+            status = status,
+            modelName = ACTIVE_MODEL.displayName,
+            conversations = conversations,
+            actions = vm,
+            // Android 13+ shows its own confirmation when something is copied, so no snackbar here.
+            onCopy = { text ->
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Liquid Pocket reply", text))
+            },
+            onOpenSettings = onOpenSettings,
+            media = media,
+        )
+    }
+}
+
+/** The photo at [path], decoded upright off the main thread; [placeholder] if it cannot be read. */
+@Composable
+private fun ImageThumbnail(
+    path: String,
+    modifier: Modifier,
+    placeholder: @Composable (path: String, modifier: Modifier) -> Unit,
+) {
+    val decoded by produceState<Result<ImageBitmap>?>(null, path) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { AndroidMediaLoader.decodeUpright(path, THUMBNAIL_SIDE).asImageBitmap() }
+        }
+    }
+    val result = decoded
+    when {
+        result == null -> Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
+        result.isSuccess -> Image(
+            bitmap = result.getOrThrow(),
+            contentDescription = "Attached photo",
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+        else -> placeholder(path, modifier)
+    }
 }

@@ -1,6 +1,8 @@
 package com.vanskis.liquidpocket
 
 import android.app.Application
+import com.vanskis.liquidpocket.chat.CachingMediaLoader
+import com.vanskis.liquidpocket.chat.MediaLoader
 import com.vanskis.liquidpocket.core.ModelCatalog
 import com.vanskis.liquidpocket.core.ModelInstaller
 import com.vanskis.liquidpocket.data.AppDatabase
@@ -8,6 +10,8 @@ import com.vanskis.liquidpocket.data.ChatRepository
 import com.vanskis.liquidpocket.download.ModelDownloads
 import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.Engines
+import com.vanskis.liquidpocket.media.AndroidMediaLoader
+import com.vanskis.liquidpocket.media.AttachmentFiles
 import com.vanskis.liquidpocket.settings.SettingsRepository
 import java.io.File
 
@@ -22,4 +26,7 @@ class LiquidPocketApp : Application() {
     val engine: Engine by lazy { Engines.llama(this) }
     val database: AppDatabase by lazy { AppDatabase.create(this) }
     val chats: ChatRepository by lazy { ChatRepository(database.chatDao()) }
+    val attachments: AttachmentFiles by lazy { AttachmentFiles(this) }
+    /** Decoded photos and clips for the engine, cached because every reply resends the whole history. */
+    val media: MediaLoader by lazy { CachingMediaLoader(AndroidMediaLoader()) }
 }
