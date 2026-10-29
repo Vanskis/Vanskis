@@ -74,6 +74,7 @@ fun ChatLayout(
     actions: ChatActions,
     onCopy: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    media: ChatMediaUi = ChatMediaUi(),
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -84,11 +85,18 @@ fun ChatLayout(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); actions.dismissError() }
     }
+    LaunchedEffect(media.transcript) {
+        media.transcript?.let { spoken ->
+            input = if (input.isBlank()) spoken else input.trimEnd() + " " + spoken
+            media.onTranscriptUsed()
+        }
+    }
 
     val ready = status == ModelStatus.Ready && !state.loading && !state.generating
     // Editing applies to the newest user turn; it lapses if that turn goes away.
     val isEditing = editing && state.lastUserIndex >= 0 && !state.generating
-    val canSend = ready && input.isNotBlank()
+    // Pending attachments go with a new message; an edit keeps the turn's own.
+    val canSend = ready && (input.isNotBlank() || (!isEditing && media.pending.isNotEmpty()))
 
     fun closeDrawerThen(action: () -> Unit) {
         editing = false
@@ -135,6 +143,14 @@ fun ChatLayout(
                             }
                         },
                         actions = {
+                            media.speakReplies?.let { on ->
+                                IconButton(onClick = media.onToggleSpeakReplies) {
+                                    Icon(
+                                        if (on) AppIcons.VolumeUp else AppIcons.VolumeOff,
+                                        contentDescription = if (on) "Stop speaking replies" else "Speak replies",
+                                    )
+                                }
+                            }
                             IconButton(onClick = { editing = false; actions.newChat() }) {
                                 Icon(Icons.Filled.Add, contentDescription = "New chat")
                             }
@@ -156,6 +172,9 @@ fun ChatLayout(
                     onStop = actions::stop,
                     editing = isEditing,
                     onCancelEdit = { editing = false; input = "" },
+                    attachmentActions = media.attachmentActions,
+                    pending = if (isEditing) emptyList() else media.pending,
+                    onRemovePending = media.onRemovePending,
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -226,6 +245,7 @@ private fun MessageList(
                     val newest = idle && index == state.lastUserIndex
                     UserMessage(
                         text = user.text,
+                        attachments = user.attachments,
                         onEdit = if (newest) ({ onEdit(user.text) }) else null,
                         // A user turn with no reply after it: the reply failed or was stopped before its first token.
                         onRetry = if (newest && isLast) onRegenerate else null,

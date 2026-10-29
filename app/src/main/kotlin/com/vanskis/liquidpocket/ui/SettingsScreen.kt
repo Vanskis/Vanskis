@@ -5,12 +5,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -24,9 +28,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.SettingsViewModel
@@ -96,6 +102,34 @@ fun SettingsScreen(
                 Switch(checked = settings.dynamicColor, onCheckedChange = vm::setDynamicColor)
             }
 
+            Text("Voice", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Speak replies", style = MaterialTheme.typography.titleMedium)
+                    Text("Read each reply aloud as it is written.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = settings.speakReplies, onCheckedChange = vm::setSpeakReplies)
+            }
+            Text("Voice engine", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+            Column(modifier = Modifier.selectableGroup()) {
+                VoiceEngineOption(
+                    label = "Model (Omni)",
+                    detail = "The model hears your voice messages and answers in its own voice.",
+                    selected = settings.voiceEngine == VoiceEngine.MODEL,
+                    onSelect = { vm.setVoiceEngine(VoiceEngine.MODEL) },
+                )
+                VoiceEngineOption(
+                    label = "Android",
+                    detail = "Android types what you say into the message field and reads replies aloud.",
+                    selected = settings.voiceEngine == VoiceEngine.ANDROID,
+                    onSelect = { vm.setVoiceEngine(VoiceEngine.ANDROID) },
+                )
+            }
+            Text(
+                "Android is also used whenever the loaded model cannot hear or speak.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
             OutlinedButton(onClick = onOpenMemory, modifier = Modifier.padding(top = 24.dp)) { Text("Things to remember") }
             Text(
                 "Facts about you that the model is given at the start of every chat.",
@@ -103,6 +137,20 @@ fun SettingsScreen(
             )
 
             OutlinedButton(onClick = onManageModel, modifier = Modifier.padding(top = 24.dp)) { Text("Manage model") }
+        }
+    }
+}
+
+@Composable
+private fun VoiceEngineOption(label: String, detail: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, onClick = onSelect, role = Role.RadioButton).padding(vertical = 4.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

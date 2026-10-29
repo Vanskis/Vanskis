@@ -38,14 +38,24 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.rememberMarkdownState
+import com.vanskis.liquidpocket.chat.Attachment
 import com.vanskis.liquidpocket.engine.GenerationStats
 import java.util.Locale
 
-/** The user's message, right-aligned in a bubble. [onEdit] and [onRetry] show only when given. */
+/** The user's message, right-aligned in a bubble under its [attachments]. [onEdit] and [onRetry] show only when given. */
 @Composable
-fun UserMessage(text: String, modifier: Modifier = Modifier, onEdit: (() -> Unit)? = null, onRetry: (() -> Unit)? = null) {
+fun UserMessage(
+    text: String,
+    modifier: Modifier = Modifier,
+    attachments: List<Attachment> = emptyList(),
+    onEdit: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+) {
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        Surface(
+        if (attachments.isNotEmpty()) {
+            MessageAttachments(attachments, modifier = Modifier.padding(bottom = if (text.isEmpty()) 0.dp else 4.dp))
+        }
+        if (text.isNotEmpty()) Surface(
             shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp),
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,

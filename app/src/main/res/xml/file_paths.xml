@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the camera's scratch captures are shared, with the camera app taking the photo. -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>
