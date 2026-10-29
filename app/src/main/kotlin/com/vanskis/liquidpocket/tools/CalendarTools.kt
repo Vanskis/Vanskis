@@ -125,8 +125,14 @@ class CreateEventTool(private val context: Context, private val gate: Permission
             end.toLocalDate() == start.toLocalDate() -> "${ToolTime.describe(start)}–${end.toLocalTime()}"
             else -> "${ToolTime.describe(start)} – ${ToolTime.describe(end)}"
         }
-        return "Add “${args.string("title")}” to your calendar on $time" + (args.string("location")?.let { " at $it" } ?: "")
+        return "Add “${args.string("title")}” to your calendar on $time" +
+            (args.string("location")?.let { " at $it" } ?: "") +
+            (args.string("description")?.trim()?.takeIf { it.isNotEmpty() }?.let { ", with the note “${shortened(it)}”" } ?: "")
     }
+
+    /** [text] cut to [MAX_DESCRIBED_CHARS] for the card, ending in "…" when cut. */
+    private fun shortened(text: String) =
+        if (text.length <= MAX_DESCRIBED_CHARS) text else text.take(MAX_DESCRIBED_CHARS).trimEnd() + "…"
 
     override suspend fun run(args: JsonObject): ToolResult {
         if (!gate.ensure(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)) {
@@ -153,6 +159,10 @@ class CreateEventTool(private val context: Context, private val gate: Permission
     private fun endOf(args: JsonObject, start: LocalDateTime): LocalDateTime {
         if (ToolTime.isDateOnly(args.string("start"))) return start.plusDays(1)
         return ToolTime.dateTime(args.string("end"), ZoneId.systemDefault())?.takeIf { it.isAfter(start) } ?: start.plusHours(1)
+    }
+
+    private companion object {
+        const val MAX_DESCRIBED_CHARS = 200
     }
 }
 

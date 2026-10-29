@@ -206,9 +206,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     override fun dismissError() = controller.dismissError()
 
-    override fun approveTool() = controller.approveTool()
+    override fun approveTool(confirmationId: Long) = controller.approveTool(confirmationId)
 
-    override fun declineTool() = controller.declineTool()
+    override fun declineTool(confirmationId: Long) = controller.declineTool(confirmationId)
 
     /** Reports a problem the screen ran into (a denied permission, no camera app). */
     fun showError(message: String) = controller.showError(message)

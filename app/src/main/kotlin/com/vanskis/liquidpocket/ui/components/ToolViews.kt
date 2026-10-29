@@ -65,8 +65,9 @@ private fun confirmationTitle(toolName: String): String = when (toolName) {
 @Composable
 fun ToolConfirmationCard(
     confirmation: ToolConfirmation,
-    onApprove: () -> Unit,
-    onCancel: () -> Unit,
+    /** Given [confirmation]'s id, so the answer is for this card's call. */
+    onApprove: (confirmationId: Long) -> Unit,
+    onCancel: (confirmationId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     OutlinedCard(
@@ -77,8 +78,8 @@ fun ToolConfirmationCard(
             Text(confirmationTitle(confirmation.toolName), style = MaterialTheme.typography.titleMedium)
             Text(confirmation.description, style = MaterialTheme.typography.bodyMedium)
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onCancel) { Text("Cancel") }
-                Button(onClick = onApprove, modifier = Modifier.padding(start = 8.dp)) { Text("Approve") }
+                TextButton(onClick = { onCancel(confirmation.id) }) { Text("Cancel") }
+                Button(onClick = { onApprove(confirmation.id) }, modifier = Modifier.padding(start = 8.dp)) { Text("Approve") }
             }
         }
     }

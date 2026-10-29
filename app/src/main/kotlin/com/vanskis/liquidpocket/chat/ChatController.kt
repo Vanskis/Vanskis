@@ -55,8 +55,11 @@ data class ChatState(
     val lastUserIndex: Int get() = turns.indexOfLast { it.role == Role.USER && !it.fromTool }
 }
 
-/** What a write tool will do, shown on the card the user approves or cancels. */
-data class ToolConfirmation(val toolName: String, val description: String)
+/**
+ * What a write tool will do, shown on the card the user approves or cancels. [id] is new for each
+ * card, so an answer is only taken for the card it was given on.
+ */
+data class ToolConfirmation(val id: Long, val toolName: String, val description: String)
 
 /** Rounds of tool calls (run them, then ask the model again) allowed per user message. */
 const val MAX_TOOL_ROUNDS = 5
@@ -101,13 +104,19 @@ class ChatController(
     /** Completed with the user's answer to [ChatState.confirmation]. */
     private var approval: CompletableDeferred<Boolean>? = null
 
+    /** The [ToolConfirmation.id] of the newest card. */
+    private var lastConfirmationId = 0L
+
     /** The request behind the engine's current model, as the engine may clamp the context size. */
     private var loadedFor: Pair<String, Int>? = null
 
-    /** Loads [modelPath] (with its projector [mmprojPath]) and [contextSize] unless the engine already has exactly that loaded. */
+    /**
+     * Loads [modelPath] (with its projector [mmprojPath]) and [contextSize] unless the engine already
+     * has exactly that loaded. Does nothing during a swap to the smart model, which loads the resident back as it ends.
+     */
     suspend fun ensureLoaded(modelPath: String, contextSize: Int, mmprojPath: String? = null) {
         val target = LoadTarget(modelPath, mmprojPath, contextSize)
-        if (isLoaded(target)) return
+        if (_state.value.swap != null || isLoaded(target)) return
         // Outside the lock: an operation on the smart model loads the resident back, under it, as it ends.
         stopAndWait(job)
         load(target)
@@ -194,14 +203,14 @@ class ChatController(
         if (_state.value.generating) requestStop()
     }
 
-    /** Runs the tool call waiting in [ChatState.confirmation]. */
-    fun approveTool() {
-        approval?.complete(true)
-    }
+    /** Runs the tool call waiting in [ChatState.confirmation], if [confirmationId] is that card's. */
+    fun approveTool(confirmationId: Long) = answer(confirmationId, true)
 
-    /** Declines the tool call waiting in [ChatState.confirmation]; the model is told so. */
-    fun declineTool() {
-        approval?.complete(false)
+    /** Declines the tool call waiting in [ChatState.confirmation], if [confirmationId] is that card's; the model is told so. */
+    fun declineTool(confirmationId: Long) = answer(confirmationId, false)
+
+    private fun answer(confirmationId: Long, approved: Boolean) {
+        if (_state.value.confirmation?.id == confirmationId) approval?.complete(approved)
     }
 
     /** Starts a new, unsaved conversation. */
@@ -431,7 +440,7 @@ class ChatController(
             val problem = tool.check(call.argumentsJson)
             when {
                 problem != null -> ToolResult(ToolResults.error(problem))
-                tool.needsConfirmation && !confirm(ToolConfirmation(call.name, tool.describe(call.argumentsJson))) ->
+                tool.needsConfirmation && !confirm(ToolConfirmation(++lastConfirmationId, call.name, tool.describe(call.argumentsJson))) ->
                     ToolResult(ToolResults.DECLINED)
                 else -> withContext(work) { tool.run(call.argumentsJson) }
             }
@@ -503,9 +512,17 @@ class ChatController(
      * take, or whose file is gone, becomes a note in the text so the engine is never given it.
      */
     private fun Turn.toMessage(caps: Capabilities): ChatMessage {
-        // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are.
+        // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
+        // or as a note to a model that cannot see them (the smart model, after a swap).
         if (role != Role.USER || attachments.isEmpty()) {
-            return ChatMessage(role, text, images = images, toolCalls = toolCalls, toolName = toolName.takeIf { role == Role.TOOL })
+            val unseen = images.isNotEmpty() && !caps.vision
+            return ChatMessage(
+                role,
+                if (unseen) listOf(text, MediaNotes.IMAGE_UNSUPPORTED).filter { it.isNotBlank() }.joinToString("\n\n") else text,
+                images = if (unseen) emptyList() else images,
+                toolCalls = toolCalls,
+                toolName = toolName.takeIf { role == Role.TOOL },
+            )
         }
         val images = mutableListOf<ImageInput>()
         val audio = mutableListOf<AudioInput>()

@@ -127,14 +127,16 @@ class ToolLoopTest {
         c.send("note milk", params)
         advanceUntilIdle()
 
-        assertEquals(ToolConfirmation("create_note", """Do create_note with {"text":"milk"}"""), c.state.value.confirmation)
+        val card = c.state.value.confirmation!!
+        assertEquals("create_note", card.toolName)
+        assertEquals("""Do create_note with {"text":"milk"}""", card.description)
         assertTrue(c.state.value.generating)
         assertEquals(emptyList<String>(), note.runs)
         assertEquals(1, engine.sent.size)
         c.send("another", params)
         assertEquals("nothing is sent while a confirmation is pending", 2, c.state.value.turns.size)
 
-        c.approveTool()
+        c.approveTool(card.id)
         advanceUntilIdle()
 
         assertEquals(listOf("""{"text":"milk"}"""), note.runs)
@@ -149,13 +151,40 @@ class ToolLoopTest {
         val c = controller()
         c.send("note milk", params)
         advanceUntilIdle()
-        c.declineTool()
+        c.declineTool(c.state.value.confirmation!!.id)
         advanceUntilIdle()
 
         assertEquals(emptyList<String>(), note.runs)
         assertEquals(2, engine.sent.size)
         assertEquals(ChatMessage(Role.TOOL, ToolResults.DECLINED, toolName = "create_note"), engine.sent[1].last())
         assertTrue(ToolResults.isDeclined(c.state.value.turns[2].text))
+    }
+
+    @Test fun `an answer is taken only for the card it was given on`() = runTest {
+        engine.replies += "" to listOf(call("create_note", """{"text":"milk"}"""), call("create_note", """{"text":"eggs"}"""))
+        val c = controller()
+        c.send("note milk and eggs", params)
+        advanceUntilIdle()
+        val first = c.state.value.confirmation!!
+
+        c.approveTool(first.id)
+        advanceUntilIdle()
+        val second = c.state.value.confirmation!!
+        assertEquals("""Do create_note with {"text":"eggs"}""", second.description)
+
+        // A second tap on the first card, landing after the second card replaced it.
+        c.approveTool(first.id)
+        c.declineTool(first.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf("""{"text":"milk"}"""), note.runs)
+        assertEquals(second, c.state.value.confirmation)
+        assertTrue(c.state.value.generating)
+
+        c.approveTool(second.id)
+        advanceUntilIdle()
+        assertEquals(listOf("""{"text":"milk"}""", """{"text":"eggs"}"""), note.runs)
+        assertNull(c.state.value.confirmation)
     }
 
     @Test fun `stop during a pending confirmation declines it and asks the model nothing more`() = runTest {
@@ -197,6 +226,7 @@ class ToolLoopTest {
     @Test fun `photos a tool returns follow its result on a user turn that is not the user's`() = runTest {
         val image = ImageInput(2, 1, ByteArray(6))
         val photos = FakeTool("look_at_photos", needsConfirmation = false, result = ToolResult("""{"shown":[7]}""", listOf(image)))
+        engine.capabilities.value = Capabilities.NONE.copy(vision = true)
         engine.replies += "" to listOf(call("look_at_photos", """{"ids":[7]}"""))
         val c = controller(photos)
         c.send("what is in photo 7?", GenerationParams(tools = listOf(photos.spec)))

@@ -8,6 +8,7 @@ import com.vanskis.liquidpocket.engine.EngineException
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.engine.GenerationStats
+import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
@@ -47,6 +48,8 @@ class ModelSwapTest {
         var failLoadOf: String? = null
         /** When set, the next reply waits for it (or for [stop]) after its first text. */
         var hold: CompletableDeferred<Unit>? = null
+        /** Models that see images; any other refuses a message with images, as the native engine does. */
+        var visionModels = emptySet<String>()
 
         val loaded: String? get() = (state.value as? EngineState.Ready)?.modelPath
 
@@ -57,6 +60,7 @@ class ModelSwapTest {
                 throw EngineException("no memory")
             }
             state.value = EngineState.Ready(modelPath, config.contextSize)
+            capabilities.value = Capabilities.NONE.copy(vision = modelPath in visionModels)
         }
 
         override suspend fun unload() {
@@ -70,6 +74,9 @@ class ModelSwapTest {
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
             chats += (loaded ?: "none") to params
             sent += messages
+            if (!capabilities.value.vision && messages.any { it.images.isNotEmpty() }) {
+                throw EngineException("The loaded model cannot see images")
+            }
             val (text, calls) = replies.removeFirstOrNull() ?: ("Done" to emptyList())
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             hold?.let { it.await(); hold = null }
@@ -114,6 +121,15 @@ class ModelSwapTest {
             runs += argumentsJson
             return ToolResult("""{"time":"10:00"}""")
         }
+    }
+
+    /** Like look_at_photos: returns the photos for the model to see. */
+    private class PhotoTool : Tool {
+        override val spec = ToolSpec("look_at_photos", "Looks at photos.", """{"type":"object"}""")
+        override val needsConfirmation = false
+        override fun describe(argumentsJson: String) = "photos"
+        override suspend fun run(argumentsJson: String) =
+            ToolResult("""{"photos":1}""", images = listOf(ImageInput(1, 1, ByteArray(3))))
     }
 
     private val engine = SwapEngine()
@@ -257,6 +273,61 @@ class ModelSwapTest {
         assertTrue(engine.loads.isEmpty())
         assertTrue(engine.chats.isEmpty())
         assertEquals(before, c.state.value)
+    }
+
+    @Test fun `tool photos reach a smart model that cannot see as a note instead`() = runTest {
+        engine.visionModels = setOf(RESIDENT.path)
+        val photos = PhotoTool()
+        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(clock, photos), models = models)
+        val withPhotos = params.copy(tools = listOf(clock.spec, photos.spec))
+        c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath)
+        engine.replies += "" to listOf(ToolCall("look_at_photos", "{}"))
+        engine.replies += "A cat." to emptyList()
+        c.send("What is in my latest photo?", withPhotos)
+        advanceUntilIdle()
+        assertTrue("the resident sees the photo", engine.sent.last().any { it.images.isNotEmpty() })
+        assertNull(c.state.value.error)
+
+        engine.replies += "" to listOf(ToolCall("look_at_photos", "{}"))
+        engine.replies += "A tabby cat on a sofa." to emptyList()
+        c.thinkHarder(withPhotos)
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertNull(s.error)
+        assertEquals("A tabby cat on a sofa.", s.turns.last().text)
+        val shown = engine.sent.last().single { it.role == Role.USER && it.content.startsWith("Photos from") }
+        assertTrue(shown.images.isEmpty())
+        assertTrue(shown.content.endsWith(MediaNotes.IMAGE_UNSUPPORTED))
+        assertTrue("the turn keeps its photos", s.turns.any { it.fromTool && it.images.isNotEmpty() })
+        assertEquals(RESIDENT.path, engine.loaded)
+    }
+
+    @Test fun `opening the chat again during a swap leaves the smart reply running`() = runTest {
+        val c = chatted()
+        engine.hold = CompletableDeferred()
+        engine.replies += "Let me check the time." to listOf(ToolCall("get_time", "{}"))
+        engine.replies += "391, at 10:00." to emptyList()
+        c.thinkHarder(params)
+        advanceUntilIdle()
+        assertEquals(ModelSwap.SMART, c.state.value.swap)
+
+        // What the chat screen does when it is shown again (a rotation, or back from Settings).
+        launch { c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath) }
+        advanceUntilIdle()
+        assertEquals(ModelSwap.SMART, c.state.value.swap)
+        assertEquals(SMART.path, engine.loaded)
+
+        engine.hold?.complete(Unit)
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals("the smart reply's tool call ran", listOf("{}"), clock.runs)
+        assertEquals("391, at 10:00.", s.turns.last().text)
+        assertNull(s.error)
+        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
+        assertEquals(RESIDENT.path, engine.loaded)
+        assertFalse(s.busy)
     }
 
     private fun <T> List<T>.distinctUntilChangedList(): List<T> =

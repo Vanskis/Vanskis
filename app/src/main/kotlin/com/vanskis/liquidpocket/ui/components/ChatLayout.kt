@@ -68,9 +68,9 @@ interface ChatActions {
     fun deleteConversation(id: Long)
     fun dismissError()
 
-    /** Answers the tool call waiting in [ChatState.confirmation]. */
-    fun approveTool()
-    fun declineTool()
+    /** Answers the tool call waiting in [ChatState.confirmation], if [confirmationId] is the shown card's. */
+    fun approveTool(confirmationId: Long)
+    fun declineTool(confirmationId: Long)
 }
 
 /** The chat screen: the conversation drawer around the top bar, the messages and the composer. */
@@ -235,8 +235,8 @@ private fun MessageList(
     onThinkHarder: () -> Unit,
     thinkHarderEnabled: Boolean,
     onEdit: (String) -> Unit,
-    onApproveTool: () -> Unit,
-    onDeclineTool: () -> Unit,
+    onApproveTool: (confirmationId: Long) -> Unit,
+    onDeclineTool: (confirmationId: Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(rows) { listState.animateScrollToItem(0) }
