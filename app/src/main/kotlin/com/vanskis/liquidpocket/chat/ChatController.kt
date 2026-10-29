@@ -66,8 +66,8 @@ class ChatController(
     /** The request behind the engine's current model, as the engine may clamp the context size. */
     private var loadedFor: Pair<String, Int>? = null
 
-    /** Loads [modelPath] with [contextSize] unless the engine already has exactly that loaded. */
-    suspend fun ensureLoaded(modelPath: String, contextSize: Int) = loadMutex.withLock {
+    /** Loads [modelPath] (with its projector [mmprojPath]) and [contextSize] unless the engine already has exactly that loaded. */
+    suspend fun ensureLoaded(modelPath: String, contextSize: Int, mmprojPath: String? = null) = loadMutex.withLock {
         val request = modelPath to contextSize
         val alreadyLoaded = when (val current = engine.state.value) {
             is EngineState.Ready -> current.modelPath == modelPath &&
@@ -79,8 +79,7 @@ class ChatController(
         stopAndWait(job)
         _state.update { it.copy(loading = true) }
         try {
-            // TODO(mmproj): pass the model's projector as EngineConfig(mmprojPath = …) once it is installed.
-            withContext(work) { engine.load(modelPath, EngineConfig(contextSize)) }
+            withContext(work) { engine.load(modelPath, EngineConfig(contextSize, mmprojPath)) }
             loadedFor = request
         } catch (e: CancellationException) {
             throw e

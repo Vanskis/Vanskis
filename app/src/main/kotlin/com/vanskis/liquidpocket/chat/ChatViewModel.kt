@@ -37,12 +37,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Called each time the Chat screen opens; loads (or reloads, after a context change) the model. */
     fun onChatOpened() {
         viewModelScope.launch {
-            val file = withContext(Dispatchers.IO) { graph.installer.installedFile(ACTIVE_MODEL) }
+            val (file, mmproj) = withContext(Dispatchers.IO) {
+                graph.installer.installedFile(ACTIVE_MODEL) to graph.installer.installedMmproj(ACTIVE_MODEL)
+            }
             if (file == null) {
                 controller.showError("${ACTIVE_MODEL.displayName} is not downloaded. Open Settings → Manage model.")
                 return@launch
             }
-            controller.ensureLoaded(file.path, graph.settings.settings.first().contextSize)
+            controller.ensureLoaded(file.path, graph.settings.settings.first().contextSize, mmproj?.path)
         }
     }
 
