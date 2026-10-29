@@ -20,6 +20,11 @@ if(DEFINED ANDROID_ABI)
     endif()
 endif()
 
+# libmtmd (vision and audio projectors) on its own: LLAMA_BUILD_TOOLS stays off (the default for a
+# non-standalone llama.cpp) so no servers or CLIs are built. Video input is not used (it needs ffmpeg).
+set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
+set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
+
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
@@ -37,10 +42,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         ${LLAMA_SRC}/common
         ${LLAMA_SRC}/include
         ${LLAMA_SRC}/ggml/include
-        ${LLAMA_SRC}/ggml/src)
+        ${LLAMA_SRC}/ggml/src
+        ${LLAMA_SRC}/tools/mtmd)
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
         llama
         llama-common
+        mtmd
         android
         log)

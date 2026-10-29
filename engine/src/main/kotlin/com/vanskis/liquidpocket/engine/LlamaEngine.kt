@@ -45,6 +45,8 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
 
     private val _state = MutableStateFlow<EngineState>(EngineState.Idle)
     override val state: StateFlow<EngineState> = _state.asStateFlow()
+    private val _capabilities = MutableStateFlow(Capabilities.NONE)
+    override val capabilities: StateFlow<Capabilities> = _capabilities.asStateFlow()
     private val _lastStats = MutableStateFlow<GenerationStats?>(null)
     override val lastStats: StateFlow<GenerationStats?> = _lastStats.asStateFlow()
 
@@ -68,14 +70,24 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     }
                     if (loaded != null) {
                         loaded = null
+                        _capabilities.value = Capabilities.NONE
                         LlamaNative.nativeUnload()
                     }
-                    val file = File(modelPath)
-                    if (!file.isFile || !file.canRead()) throw EngineException("Model file not readable: $modelPath")
+                    requireReadable(modelPath, "Model")
+                    config.mmprojPath?.let { requireReadable(it, "Projector") }
                     val threads = ThreadPolicy.threadsFor(Runtime.getRuntime().availableProcessors())
-                    val contextSize = LlamaNative.nativeLoad(modelPath, config.contextSize, threads)
+                    val contextSize = LlamaNative.nativeLoad(modelPath, config.mmprojPath, config.contextSize, threads)
+                    val caps = LlamaNative.nativeCapabilities()
                     val ready = EngineState.Ready(modelPath, contextSize)
                     loaded = ready
+                    // Speech output is not supported yet.
+                    _capabilities.value = Capabilities(
+                        vision = caps[0] != 0,
+                        audioIn = caps[1] != 0,
+                        audioOut = false,
+                        audioInSampleRate = caps[2],
+                        audioOutSampleRate = 0,
+                    )
                     _state.value = ready
                 } catch (e: CancellationException) {
                     throw e
@@ -93,6 +105,7 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
             withContext(dispatcher) {
                 if (loaded != null) {
                     loaded = null
+                    _capabilities.value = Capabilities.NONE
                     LlamaNative.nativeUnload()
                 }
                 _state.value = EngineState.Idle
@@ -100,12 +113,14 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
         }
     }
 
-    override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<String> = flow {
+    override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
         mutex.withLock {
             val ready = loaded ?: throw EngineException("No model loaded")
-            if (messages.lastOrNull()?.role != Role.USER) {
-                throw EngineException("The conversation must end with a user message")
+            val last = messages.lastOrNull()?.role
+            if (last != Role.USER && last != Role.TOOL) {
+                throw EngineException("The conversation must end with a user message or a tool result")
             }
+            NativePrompt.checkMedia(messages, _capabilities.value)
             stopRequested = false
             _state.value = EngineState.Generating
             var promptTokens = 0
@@ -118,10 +133,29 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
             try {
                 val budget = ContextBudget.of(ready.contextSize, params.maxNewTokens)
                 val trimmed = ConversationTrimmer.trim(messages, budget) { msgs ->
-                    native { LlamaNative.nativeCountPromptTokens(roles(msgs), contents(msgs)) }
+                    val p = NativePrompt.of(msgs, params.tools, placeholders = true)
+                    native {
+                        LlamaNative.nativeCountPromptTokens(
+                            p.roles, p.contents, p.toolNames, p.toolCalls,
+                            p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                        )
+                    }
                 }.messages
+                val p = NativePrompt.of(trimmed, params.tools)
+                val markers = native {
+                    LlamaNative.nativeReplyMarkers(p.roles, p.contents, p.toolNames, p.toolCalls, p.tools)
+                }
+                val filter = ReplyFilter(
+                    thinkStart = markers[0].firstOrNull()?.let(::utf8),
+                    thinkEnds = markers[1].map(::utf8),
+                    toolStarts = markers[2].map(::utf8),
+                )
                 val counts = native {
-                    LlamaNative.nativeBeginReply(roles(trimmed), contents(trimmed), params.temperature)
+                    LlamaNative.nativeBeginReply(
+                        p.roles, p.contents, p.toolNames, p.toolCalls,
+                        p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                        params.temperature,
+                    )
                 }
                 promptTokens = counts[0]
                 prefillTokens = counts[1]
@@ -143,8 +177,17 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     val bytes = native { LlamaNative.nativeNextToken() } ?: break
                     decodeNanos += System.nanoTime() - t0
                     generated++
-                    val text = utf8.append(bytes)
-                    if (text.isNotEmpty()) emit(text)
+                    val text = filter.append(utf8.append(bytes))
+                    if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
+                }
+                // After stop() the reply is cut short: no tool calls, and no held-back text.
+                if (stopRequested) return@withLock
+
+                val parsed = native { LlamaNative.nativeParseReply() }?.map(::utf8)
+                val rest = filter.complete(parsed?.first())
+                if (rest.isNotEmpty()) emit(ReplyChunk.Text(rest))
+                parsed?.drop(1)?.chunked(2)?.forEach { (name, args) ->
+                    emit(ReplyChunk.ToolCall(ToolCall(name, args)))
                 }
             } catch (e: EngineException) {
                 // Raised before decoding started (e.g. the message is too long): the model is fine.
@@ -188,9 +231,12 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
         return cause as? EngineException ?: EngineException(message, cause)
     }
 
-    private fun roles(msgs: List<ChatMessage>) = IntArray(msgs.size) { LlamaNative.roleCode(msgs[it].role) }
+    private fun requireReadable(path: String, what: String) {
+        val file = File(path)
+        if (!file.isFile || !file.canRead()) throw EngineException("$what file not readable: $path")
+    }
 
-    private fun contents(msgs: List<ChatMessage>) = Array(msgs.size) { msgs[it].content.toByteArray(Charsets.UTF_8) }
+    private fun utf8(bytes: ByteArray) = String(bytes, Charsets.UTF_8)
 
     private fun perSecond(tokens: Int, nanos: Long): Double = if (nanos <= 0) 0.0 else tokens * 1e9 / nanos
 

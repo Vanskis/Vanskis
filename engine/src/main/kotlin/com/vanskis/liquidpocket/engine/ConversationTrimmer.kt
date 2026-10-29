@@ -25,8 +25,9 @@ internal data class TrimResult(val messages: List<ChatMessage>, val promptTokens
 internal object ConversationTrimmer {
     /**
      * Returns [messages] unchanged if they fit [ContextBudget.maxPromptTokens] as measured by
-     * [countTokens]. Otherwise drops the oldest non-system messages (never the last one, and never
-     * leaving an assistant reply first in the history) until the prompt fits
+     * [countTokens]. Otherwise drops the oldest non-system messages (never the last user message or
+     * anything after it, such as the tool calls and results of the current turn, and never leaving
+     * an assistant reply or tool result first in the history) until the prompt fits
      * [ContextBudget.targetPromptTokens] or nothing more can be dropped. Throws [EngineException]
      * if even the shortest conversation exceeds [ContextBudget.maxPromptTokens].
      */
@@ -52,14 +53,16 @@ internal object ConversationTrimmer {
         return TrimResult(kept, count)
     }
 
-    /** Removes the oldest droppable turn (a message plus any assistant replies after it). */
+    /** Removes the oldest droppable turn (a message plus any assistant replies and tool results after it). */
     private fun dropOldestTurn(kept: MutableList<ChatMessage>): Boolean {
-        val first = kept.indices.firstOrNull { it < kept.lastIndex && kept[it].role != Role.SYSTEM }
+        val protectedFrom = kept.indexOfLast { it.role == Role.USER }.coerceAtLeast(0)
+        val first = kept.indices.firstOrNull { it < protectedFrom && kept[it].role != Role.SYSTEM }
             ?: return false
         kept.removeAt(first)
         while (true) {
+            // Stops at the protected user message at the latest.
             val next = kept.indices.firstOrNull { kept[it].role != Role.SYSTEM } ?: break
-            if (next == kept.lastIndex || kept[next].role != Role.ASSISTANT) break
+            if (kept[next].role != Role.ASSISTANT && kept[next].role != Role.TOOL) break
             kept.removeAt(next)
         }
         return true
