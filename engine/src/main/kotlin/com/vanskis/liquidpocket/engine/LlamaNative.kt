@@ -34,7 +34,10 @@ internal object LlamaNative {
      */
     external fun nativeLoad(modelPath: String, mmprojPath: String?, contextSize: Int, threads: Int): Int
 
-    /** `[vision, audioIn, audioInSampleRate]` of the loaded projector (0/1 flags), zeros without one. */
+    /**
+     * `[vision, audioIn, audioInSampleRate, audioOut, audioOutSampleRate]` of the loaded projector
+     * (0/1 flags), zeros without one. See [NativeCapabilities].
+     */
     external fun nativeCapabilities(): IntArray
 
     external fun nativeUnload()
@@ -52,7 +55,10 @@ internal object LlamaNative {
         tools: Array<ByteArray>,
     ): Int
 
-    /** Starts a reply to `<prompt>`. Returns `[promptTokens, prefillTokens]`; prefill tokens are still to decode. */
+    /**
+     * Starts a reply to `<prompt>`. Returns `[promptTokens, prefillTokens]`; prefill tokens are still to decode.
+     * [speak]: also answer in speech (see [nativeTakeAudio]), ignored when the projector cannot.
+     */
     external fun nativeBeginReply(
         roles: IntArray,
         contents: Array<ByteArray>,
@@ -64,6 +70,7 @@ internal object LlamaNative {
         mediaData: Array<Any?>,
         tools: Array<ByteArray>,
         temperature: Float,
+        speak: Boolean,
     ): IntArray
 
     /**
@@ -84,8 +91,17 @@ internal object LlamaNative {
      */
     external fun nativePrefillStep(): Int
 
-    /** Generates one token: its UTF-8 bytes (maybe part of a character), or null when the reply ends. */
+    /**
+     * Generates one token: its UTF-8 bytes (maybe part of a character), or null when the reply ends.
+     * A spoken reply also has steps that only produce audio: they return an empty array.
+     */
     external fun nativeNextToken(): ByteArray?
+
+    /**
+     * The speech PCM (mono floats at `audioOutSampleRate`) generated since the last call, or null if
+     * none. [flush] once the reply has ended: the speech decoder's held-back tail comes out too.
+     */
+    external fun nativeTakeAudio(flush: Boolean): FloatArray?
 
     /**
      * Parses the finished reply with the chat template's parser: `[content, name, arguments, name,

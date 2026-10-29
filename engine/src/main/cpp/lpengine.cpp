@@ -93,6 +93,19 @@
 //     int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunk * chunk,
 //                                           llama_pos n_past, llama_seq_id seq_id, int32_t n_batch,
 //                                           bool logits_last, llama_pos * new_n_past);
+//     mtmd_helper::gen_audio { init(lctx, mctx); valid(); set_input(inp); step_prompt(n_batch);
+//                              step_gen(sampled, h_state, &h_state_out, &stop); next_is_text();
+//                              logit_bias(); get_output(&rate, &data, &len); flush(); }
+//     mtmd_helper::gen_audio::inp { data: mtmd_helper_gen_audio_inp { stream, seq_id, n_past, out_mode,
+//                                   seed, out_type, ... }; set_prompt(text); get(); }
+//   tools/mtmd/mtmd.h (speech output)
+//     mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);   // { type, sample_rate, ... }
+//   include/llama.h (speech output)
+//     void        llama_set_embeddings(llama_context * ctx, bool embeddings);   // true: every token is output
+//     float *     llama_get_embeddings_ith(llama_context * ctx, int32_t i);
+//     int32_t     llama_model_n_embd(const llama_model * model);
+//     llama_pos   llama_memory_seq_pos_max(llama_memory_t mem, llama_seq_id seq_id);
+//     bool        llama_vocab_is_control(const llama_vocab * vocab, llama_token token);
 
 #include <jni.h>
 
@@ -100,6 +113,7 @@
 #include <cstdio>
 #include <exception>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -171,6 +185,23 @@ bool g_pending_has_media = false;
 // The current reply, for the template's own parser.
 common_chat_parser_params g_parser;
 common_chat_input g_generated;
+
+// Speech output: with an LFM3-Audio projector, a spoken reply is driven by libmtmd's gen-audio
+// helper the way llama-server's realtime slot drives a response (tools/server/server-realtime.cpp,
+// server_realtime_slot::response_start/response_step): the helper decodes the generation prompt
+// itself, opens an interleaved text+audio block and decodes every text token and audio frame;
+// this side samples the text tokens and collects the PCM.
+mtmd_helper::gen_audio g_gen;           // valid only when the projector can continue a conversation in speech
+bool g_speak = false;                   // the current reply is spoken (its generation prompt is held back)
+std::string g_speak_header;             // that generation prompt, decoded by g_gen
+llama_pos g_speak_n_past = 0;           // where it goes: the end of the prefilled prompt
+bool g_speak_started = false;           // g_gen has decoded the header
+bool g_speak_done = false;              // the spoken reply has ended
+bool g_speak_in_memory = false;         // memory holds a spoken reply past g_n_past that g_cached does not
+std::vector<float> g_h_state;           // the backbone hidden state the next audio frame starts from
+llama_token g_sampled = LLAMA_TOKEN_NULL;  // the text token g_gen takes next, NULL before an audio frame
+std::set<llama_token> g_preserved;      // control tokens the parser needs in the text (tool calls)
+std::vector<float> g_audio;             // PCM not yet taken by nativeTakeAudio
 
 void throw_java(JNIEnv * env, const std::string & message) {
     LOGe("%s", message.c_str());
@@ -255,13 +286,29 @@ void reset_pending() {
     g_pending_has_media = false;
 }
 
+void reset_speech() {
+    g_speak = false;
+    g_speak_header.clear();
+    g_speak_n_past = 0;
+    g_speak_started = false;
+    g_speak_done = false;
+    g_h_state.clear();
+    g_sampled = LLAMA_TOKEN_NULL;
+    g_preserved.clear();
+    g_audio.clear();
+}
+
 void reset_cache() {
-    if (g_ctx != nullptr) llama_memory_clear(llama_get_memory(g_ctx), true);
+    if (g_ctx != nullptr) {
+        llama_memory_clear(llama_get_memory(g_ctx), true);
+        llama_set_embeddings(g_ctx, false);
+    }
     g_cached.clear();
     g_n_past = 0;
     g_n_tokens = 0;
     g_cached_text.clear();
     g_cached_text_valid = false;
+    g_speak_in_memory = false;
     reset_pending();
 }
 
@@ -272,8 +319,69 @@ void cache_push(const unit & u) {
     g_n_tokens += static_cast<size_t>(u.n_tokens);
 }
 
+// A spoken reply leaves its header, text tokens and audio frames in memory past g_n_past; a
+// re-rendered conversation holds the reply as text only and never matches them. Account for them
+// as one opaque unit (no prompt unit has this id), so the next prompt keeps only what precedes it.
+// Also ends the embeddings output the helper needs, which would slow every prefill batch down.
+void settle_speech() {
+    if (!g_speak_in_memory) return;
+    g_speak_in_memory = false;
+    llama_set_embeddings(g_ctx, false);
+    const llama_pos end = llama_memory_seq_pos_max(llama_get_memory(g_ctx), 0) + 1;
+    if (end > g_n_past) {
+        unit u;
+        u.media_id = "spoken-reply";
+        u.n_pos = end - g_n_past;
+        u.n_tokens = static_cast<int32_t>(u.n_pos);
+        cache_push(u);
+    }
+    g_cached_text_valid = false;
+}
+
+// Drops the last n bytes of a rendered prompt, all from template parts (the generation prompt);
+// false if they reach into user input.
+bool strip_tail(common_chat_prompt & prompt, size_t n) {
+    while (n > 0 && !prompt.parts.empty()) {
+        auto & last = prompt.parts.back();
+        if (last.is_input) return false;
+        const size_t k = std::min(n, last.text.size());
+        last.text.resize(last.text.size() - k);
+        n -= k;
+        if (last.text.empty()) prompt.parts.pop_back();
+    }
+    return n == 0;
+}
+
+// Moves the PCM the helper produced since the last call into g_audio.
+void collect_audio() {
+    int32_t rate = 0;
+    const char * data = nullptr;
+    size_t len = 0;
+    if (g_gen.get_output(&rate, &data, &len) == 0 && len > 0) {
+        const auto * pcm = reinterpret_cast<const float *>(data);
+        g_audio.insert(g_audio.end(), pcm, pcm + len / sizeof(float));
+    }
+}
+
+// The next text token, if the helper takes one next (server-realtime.cpp, sample_next).
+void speak_sample_next() {
+    g_sampled = LLAMA_TOKEN_NULL;
+    if (!g_gen.next_is_text()) return;
+    g_sampled = common_sampler_sample(g_sampler, g_ctx, -1);
+    common_sampler_accept(g_sampler, g_sampled, true);
+}
+
+// Control tokens (the text/audio switches) stay out of the text, except the preserved ones the
+// parser needs (server-realtime.cpp, server_realtime_slot::piece).
+std::string speak_piece(llama_token tok) {
+    const bool p = g_preserved.count(tok) > 0;
+    return p || !llama_vocab_is_control(g_vocab, tok) ? common_token_to_piece(g_ctx, tok, p) : "";
+}
+
 void free_all() {
     reset_cache();
+    reset_speech();
+    g_gen.ctx.reset();
     if (g_sampler != nullptr) { common_sampler_free(g_sampler); g_sampler = nullptr; }
     g_templates.reset();
     g_parser = common_chat_parser_params();
@@ -578,23 +686,34 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
             throw_java(env, "Could not load the multimodal projector (wrong or corrupt mmproj GGUF?): " + mmproj);
             return 0;
         }
+        // Only the LFM3-Audio pipeline can continue a conversation in speech (supports_continue in
+        // tools/mtmd/mtmd-helper-gen.cpp); the other ones are text-to-speech only.
+        if (mtmd_gen_audio_get_info(g_mtmd).type == MTMD_GEN_AUDIO_TYPE_LFM3A) {
+            g_gen.init(g_ctx, g_mtmd);
+            if (!g_gen.valid()) LOGw("The projector generates audio, but its pipeline could not be set up");
+        }
     }
     LOGi("Loaded %s: n_ctx=%d (requested %d, trained %d), threads=%d, projector=%s", path.c_str(), g_n_ctx,
          static_cast<int>(jn_ctx), n_train, static_cast<int>(jn_threads), g_mtmd != nullptr ? "yes" : "no");
     return g_n_ctx;
 }
 
-// [vision, audioIn, audioInSampleRate] of the loaded projector, zeros without one.
+// [vision, audioIn, audioInSampleRate, audioOut, audioOutSampleRate] of the loaded projector,
+// zeros without one.
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeCapabilities(JNIEnv * env, jobject /*thiz*/) {
-    jint caps[3] = { 0, 0, 0 };
+    jint caps[5] = { 0, 0, 0, 0, 0 };
     if (g_mtmd != nullptr) {
         caps[0] = mtmd_support_vision(g_mtmd) ? 1 : 0;
         caps[1] = mtmd_support_audio(g_mtmd) ? 1 : 0;
         caps[2] = caps[1] != 0 ? std::max(0, mtmd_get_audio_sample_rate(g_mtmd)) : 0;
+        if (g_gen.valid()) {
+            caps[4] = std::max(0, mtmd_gen_audio_get_info(g_mtmd).sample_rate);
+            caps[3] = caps[4] > 0 ? 1 : 0;
+        }
     }
-    jintArray out = env->NewIntArray(3);
-    if (out != nullptr) env->SetIntArrayRegion(out, 0, 3, caps);
+    jintArray out = env->NewIntArray(5);
+    if (out != nullptr) env->SetIntArrayRegion(out, 0, 5, caps);
     return out;
 }
 
@@ -627,20 +746,39 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeCountPromptTokens(
 }
 
 // Prepares a reply: renders the conversation, reuses the cached prefix where possible and queues
-// the remaining prompt for nativePrefillStep. Returns [promptTokens, prefillTokens].
+// the remaining prompt for nativePrefillStep. Returns [promptTokens, prefillTokens]. With jspeak
+// and a projector that speaks, the reply is spoken as well (see g_gen); otherwise jspeak is ignored.
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
         JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents, jobjectArray tool_names,
         jobjectArray tool_calls, jintArray media_msg, jintArray media_kind, jintArray media_dims,
-        jobjectArray media_data, jobjectArray tools, jfloat temperature) {
+        jobjectArray media_data, jobjectArray tools, jfloat temperature, jboolean jspeak) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return nullptr; }
+    settle_speech();
+    reset_speech();
     reset_pending();
     const prompt_args a { roles, contents, tool_names, tool_calls, media_msg, media_kind, media_dims, media_data, tools };
     const bool has_media = env->GetArrayLength(media_kind) > 0;
 
     common_chat_params params;
+    bool speak = false;
     try {
         params = render(env, a, has_media);
+        if (jspeak && g_gen.valid()) {
+            // The helper decodes the generation prompt itself and opens the spoken block after it,
+            // as the realtime slot passes it the assistant header (server-realtime.cpp, on_response_create).
+            const std::string & header = params.generation_prompt;
+            const std::string text = params.prompt.str();
+            speak = !header.empty() && text.size() > header.size() &&
+                    text.compare(text.size() - header.size(), header.size(), header) == 0 &&
+                    strip_tail(params.prompt, header.size());
+            if (speak) {
+                g_speak_header = header;
+            } else {
+                params = render(env, a, has_media);
+                LOGw("The prompt does not end with the generation prompt; replying in text only");
+            }
+        }
         if (has_media) {
             if (g_mtmd == nullptr) throw std::runtime_error("media needs a multimodal projector");
             const auto bms = make_bitmaps(env, a);
@@ -689,7 +827,13 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
     g_pending_has_media = has_media;
     g_pending_tokens = sum_tokens(g_pending);
 
-    const size_t prompt_tokens = g_n_tokens + g_pending_tokens;
+    size_t header_tokens = 0;
+    if (speak) {
+        g_speak_n_past = g_n_past;
+        for (const auto & u : g_pending) g_speak_n_past += u.n_pos;
+        header_tokens = common_tokenize(g_vocab, g_speak_header, false, true).size();
+    }
+    const size_t prompt_tokens = g_n_tokens + g_pending_tokens + header_tokens;
     if (prompt_tokens >= static_cast<size_t>(g_n_ctx)) {
         reset_pending();
         throw_java(env, "Prompt of " + std::to_string(prompt_tokens) + " tokens does not fit the context of " +
@@ -713,10 +857,37 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
     sparams.generation_prompt = params.generation_prompt;
     common_sampling_add_preserved_tokens(sparams, g_vocab, params.preserved_tokens);
     common_sampling_add_grammar_triggers(sparams, g_vocab, params.grammar_triggers);
+    if (speak) {
+        // server-realtime.cpp, server_realtime_slot::response_start: continue the sequence after the
+        // prompt in the interleaved text+audio mode (the helper appends <|mixed_start|> to the
+        // header), streaming PCM, and add the pipeline's bias to the text sampler.
+        mtmd_helper::gen_audio::inp inp;
+        inp.set_prompt(g_speak_header);
+        inp.data.seq_id = 0;
+        inp.data.n_past = g_speak_n_past;
+        inp.data.seed = sparams.seed;
+        inp.data.stream = true;
+        inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+        inp.data.out_mode = MTMD_HELPER_GEN_AUDIO_OUT_MIXED;
+        if (g_gen.set_input(inp.get()) == 0) {
+            for (const auto & b : g_gen.logit_bias()) sparams.logit_bias.push_back(b);
+            g_preserved = sparams.preserved_tokens;
+            g_speak = true;
+        } else {
+            // Decode the held-back header as part of the prompt and reply in text.
+            LOGw("Could not start a spoken reply; replying in text only");
+            const auto toks = common_tokenize(g_vocab, g_speak_header, false, true);
+            for (const auto & u : text_units(toks)) g_pending.push_back(u);
+            g_pending_tokens += toks.size();
+            g_pending_full_text += g_speak_header;
+            g_speak_header.clear();
+            header_tokens = 0;
+        }
+    }
     g_sampler = common_sampler_init(g_model, sparams);
-    if (g_sampler == nullptr) { reset_pending(); throw_java(env, "Could not create the sampler"); return nullptr; }
+    if (g_sampler == nullptr) { reset_pending(); reset_speech(); throw_java(env, "Could not create the sampler"); return nullptr; }
 
-    jint result[2] = { static_cast<jint>(prompt_tokens), static_cast<jint>(g_pending_tokens) };
+    jint result[2] = { static_cast<jint>(prompt_tokens), static_cast<jint>(g_pending_tokens + header_tokens) };
     jintArray out = env->NewIntArray(2);
     if (out != nullptr) env->SetIntArrayRegion(out, 0, 2, result);
     return out;
@@ -802,16 +973,70 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativePrefillStep(JNIEnv * env,
             if (u.token == LLAMA_TOKEN_NULL) { g_cached_text_valid = false; break; }
         }
         reset_pending();
+        if (g_speak && !g_speak_started) {
+            // server-realtime.cpp, response_start: the helper decodes the header, the hidden state of
+            // its last token starts the first audio frame, and the first text token is sampled.
+            llama_set_embeddings(g_ctx, true);
+            g_speak_in_memory = true;
+            g_speak_started = true;
+            int32_t rc;
+            while ((rc = g_gen.step_prompt(BATCH_SIZE)) > 0) {}
+            const float * h = rc == 0 ? llama_get_embeddings_ith(g_ctx, -1) : nullptr;
+            if (h == nullptr) {
+                reset_cache();
+                reset_speech();
+                throw_java(env, "Could not start the spoken reply (mtmd_helper_gen_audio_step_prompt returned " +
+                                std::to_string(rc) + ")");
+                return 0;
+            }
+            g_h_state.assign(h, h + llama_model_n_embd(g_model));
+            speak_sample_next();
+        }
         return 0;
     }
     return static_cast<jint>(g_pending_tokens);
 }
 
+// One step of a spoken reply, a text token or an audio frame (server-realtime.cpp,
+// server_realtime_slot::response_step). Returns the token's text (empty for a frame or a control
+// token), or null when the reply has ended; the frame's PCM goes to g_audio.
+static jbyteArray speak_step(JNIEnv * env) {
+    if (g_speak_done) return nullptr;
+    const llama_token sampled = g_sampled;
+    const float * h_next = nullptr;
+    bool stop = false;
+    if (g_gen.step_gen(sampled, g_h_state.data(), &h_next, &stop) != 0) {
+        reset_cache();
+        reset_speech();
+        throw_java(env, "Spoken reply generation failed (mtmd_helper_gen_audio_step_gen)");
+        return nullptr;
+    }
+    std::string piece;
+    if (sampled != LLAMA_TOKEN_NULL && !stop) piece = speak_piece(sampled);
+    if (h_next != nullptr) g_h_state.assign(h_next, h_next + llama_model_n_embd(g_model));
+
+    // The helper decodes on its own: the reply ends before the context is full.
+    const bool ctx_full = llama_memory_seq_pos_max(llama_get_memory(g_ctx), 0) + 2 >= g_n_ctx;
+    if (ctx_full && !stop) LOGw("Context full (%d tokens), ending the reply", g_n_ctx);
+    const bool done = stop || ctx_full;
+    if (!done) speak_sample_next();
+    if (done) g_gen.flush();
+    collect_audio();
+    if (!piece.empty()) g_generated.append(piece, sampled);
+    if (done) {
+        g_speak_done = true;
+        if (piece.empty()) return nullptr;
+    }
+    return to_jbytes(env, piece);
+}
+
 // Samples and decodes one token. Returns its UTF-8 bytes (possibly a partial character), or null
-// at end of generation or when the context is full.
+// at end of generation or when the context is full. A spoken reply also returns an empty array for
+// a step that only produced audio (see nativeTakeAudio).
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeNextToken(JNIEnv * env, jobject /*thiz*/) {
     if (g_ctx == nullptr || g_sampler == nullptr) { throw_java(env, "No reply in progress"); return nullptr; }
+    if (g_speak) return speak_step(env);
     if (g_n_tokens >= static_cast<size_t>(g_n_ctx)) {
         LOGw("Context full (%d tokens), ending the reply", g_n_ctx);
         return nullptr;
@@ -835,6 +1060,21 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeNextToken(JNIEnv * env, j
     g_generated.append(piece, token);
     if (g_cached_text_valid) g_cached_text += piece;
     return to_jbytes(env, piece);
+}
+
+// The speech PCM (mono, at the audioOutSampleRate of nativeCapabilities) generated since the last
+// call, or null if none. jflush: the reply has ended, so the codec's held-back tail goes out too.
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeTakeAudio(JNIEnv * env, jobject /*thiz*/, jboolean jflush) {
+    if (jflush && g_speak && g_speak_started) {
+        if (g_gen.flush() != 0) LOGw("Could not flush the speech decoder");
+        collect_audio();
+    }
+    if (g_audio.empty()) return nullptr;
+    jfloatArray out = env->NewFloatArray(static_cast<jsize>(g_audio.size()));
+    if (out != nullptr) env->SetFloatArrayRegion(out, 0, static_cast<jsize>(g_audio.size()), g_audio.data());
+    g_audio.clear();
+    return out;
 }
 
 // Parses the finished reply with the template's parser. Returns [content, name, arguments, name,
