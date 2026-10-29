@@ -47,6 +47,9 @@ import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.chat.ChatState
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ModelStatus
+import com.vanskis.liquidpocket.chat.ModelSwap
+import com.vanskis.liquidpocket.download.DownloadStatus
+import com.vanskis.liquidpocket.download.percent
 import com.vanskis.liquidpocket.engine.Role
 import kotlinx.coroutines.launch
 
@@ -55,6 +58,9 @@ interface ChatActions {
     fun send(text: String)
     fun stop()
     fun regenerate()
+
+    /** Redoes the newest reply on the smart model, or starts its download when it is not installed. */
+    fun thinkHarder()
     fun editAndResend(text: String)
     fun newChat()
     fun openConversation(id: Long)
@@ -79,6 +85,8 @@ fun ChatLayout(
     onCopy: (String) -> Unit,
     onOpenSettings: () -> Unit,
     media: ChatMediaUi = ChatMediaUi(),
+    smartModelName: String = "",
+    smartDownload: DownloadStatus? = null,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -96,7 +104,7 @@ fun ChatLayout(
         }
     }
 
-    val ready = status == ModelStatus.Ready && !state.loading && !state.generating
+    val ready = status == ModelStatus.Ready && !state.busy
     // Editing applies to the newest user turn; it lapses if that turn goes away.
     val isEditing = editing && state.lastUserIndex >= 0 && !state.generating
     // Pending attachments go with a new message; an edit keeps the turn's own.
@@ -138,7 +146,7 @@ fun ChatLayout(
                         title = {
                             Column {
                                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                ModelStatusLine(status, modelName)
+                                ModelStatusLine(status, modelName, state.swap, smartModelName)
                             }
                         },
                         navigationIcon = {
@@ -164,6 +172,7 @@ fun ChatLayout(
                         },
                     )
                     if (status == ModelStatus.Loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    smartDownload?.takeIf { it.active }?.let { SmartModelDownload(it, smartModelName) }
                 }
             },
             bottomBar = {
@@ -197,6 +206,8 @@ fun ChatLayout(
                     contentPadding = padding,
                     onCopy = onCopy,
                     onRegenerate = actions::regenerate,
+                    onThinkHarder = actions::thinkHarder,
+                    thinkHarderEnabled = smartDownload?.active != true,
                     onEdit = { text ->
                         input = text
                         editing = true
@@ -221,6 +232,8 @@ private fun MessageList(
     contentPadding: PaddingValues,
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
+    onThinkHarder: () -> Unit,
+    thinkHarderEnabled: Boolean,
     onEdit: (String) -> Unit,
     onApproveTool: () -> Unit,
     onDeclineTool: () -> Unit,
@@ -228,7 +241,7 @@ private fun MessageList(
     val listState = rememberLazyListState()
     LaunchedEffect(rows) { listState.animateScrollToItem(0) }
     val turns = state.turns
-    val idle = !state.generating && !state.loading
+    val idle = !state.busy
 
     LazyColumn(
         state = listState,
@@ -268,12 +281,15 @@ private fun MessageList(
                 // One call site for the streaming and the saved reply, so its Markdown state carries over.
                 else -> {
                     val text = turn?.text ?: state.streaming.orEmpty()
+                    val newest = idle && isLast && state.lastUserIndex >= 0
                     AssistantMessage(
                         text = text,
                         streaming = turn == null,
                         stats = turn?.stats,
                         onCopy = { onCopy(text) },
-                        onRegenerate = if (idle && isLast && state.lastUserIndex >= 0) onRegenerate else null,
+                        onRegenerate = if (newest) onRegenerate else null,
+                        onThinkHarder = if (newest) onThinkHarder else null,
+                        thinkHarderEnabled = thinkHarderEnabled,
                     )
                 }
             }
@@ -281,25 +297,50 @@ private fun MessageList(
     }
 }
 
-/** "● LFM3-Omni-2B · Ready" under the title. */
+/** "● LFM3-Omni-2B · Ready" under the title; while a reply is swapped to [smartModelName], where that swap is. */
 @Composable
-private fun ModelStatusLine(status: ModelStatus, modelName: String) {
+private fun ModelStatusLine(status: ModelStatus, modelName: String, swap: ModelSwap?, smartModelName: String) {
     val colors = MaterialTheme.colorScheme
-    val (label, dot) = when (status) {
-        ModelStatus.Ready -> "Ready" to Color(0xFF2E7D32)
-        ModelStatus.Loading -> "Loading…" to colors.tertiary
-        ModelStatus.NotLoaded -> "Not loaded" to colors.outline
-        is ModelStatus.Error -> "Error" to colors.error
+    val (label, dot) = when (swap) {
+        ModelSwap.TO_SMART -> "Switching to $smartModelName…" to colors.tertiary
+        ModelSwap.SMART -> "$smartModelName · Thinking harder…" to colors.tertiary
+        ModelSwap.BACK -> "Switching back to $modelName…" to colors.tertiary
+        null -> when (status) {
+            ModelStatus.Ready -> "$modelName · Ready" to Color(0xFF2E7D32)
+            ModelStatus.Loading -> "$modelName · Loading…" to colors.tertiary
+            ModelStatus.NotLoaded -> "$modelName · Not loaded" to colors.outline
+            is ModelStatus.Error -> "$modelName · Error" to colors.error
+        }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = Modifier.size(8.dp).background(dot, CircleShape))
         Text(
-            "$modelName · $label",
+            label,
             style = MaterialTheme.typography.labelMedium,
             color = colors.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 6.dp),
         )
+    }
+}
+
+/** "Downloading LFM2.5-8B-A1B · 42%" with its progress, under the top bar while the smart model downloads. */
+@Composable
+private fun SmartModelDownload(status: DownloadStatus, smartModelName: String) {
+    val (label, fraction) = when (status) {
+        is DownloadStatus.Downloading -> percent(status.bytes, status.total).let { "Downloading $smartModelName · $it%" to it / 100f }
+        is DownloadStatus.Verifying -> percent(status.bytes, status.total).let { "Checking $smartModelName · $it%" to it / 100f }
+        DownloadStatus.Waiting -> "Waiting for Wi-Fi to download $smartModelName" to null
+        else -> "Preparing to download $smartModelName" to null
+    }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            "$label. Think harder works once it is done.",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val bar = Modifier.fillMaxWidth().padding(top = 4.dp)
+        if (fraction == null) LinearProgressIndicator(modifier = bar) else LinearProgressIndicator(progress = { fraction }, modifier = bar)
     }
 }

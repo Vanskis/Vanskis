@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -26,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -76,7 +78,7 @@ fun UserMessage(
 
 /**
  * The model's reply, full width, rendered as Markdown. While [streaming] with no text yet it shows the
- * typing indicator. Copy shows once the reply is complete; [onRegenerate] only when given.
+ * typing indicator. Copy shows once the reply is complete; [onRegenerate] and [onThinkHarder] only when given.
  */
 @Composable
 fun AssistantMessage(
@@ -86,6 +88,8 @@ fun AssistantMessage(
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
     onRegenerate: (() -> Unit)? = null,
+    onThinkHarder: (() -> Unit)? = null,
+    thinkHarderEnabled: Boolean = true,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(end = 8.dp)) {
         if (text.isEmpty() && streaming) {
@@ -128,6 +132,11 @@ fun AssistantMessage(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 MessageAction(AppIcons.ContentCopy, "Copy", onCopy)
                 onRegenerate?.let { MessageAction(Icons.Filled.Refresh, "Regenerate", it) }
+                onThinkHarder?.let {
+                    TextButton(onClick = it, enabled = thinkHarderEnabled, modifier = Modifier.height(36.dp)) {
+                        Text("Think harder", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
                 stats?.let { StatsLine(it, modifier = Modifier.padding(start = 4.dp)) }
             }
         }
