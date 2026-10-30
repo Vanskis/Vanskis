@@ -2,6 +2,7 @@ package com.vanskis.liquidpocket.tools
 
 import java.io.IOException
 import java.util.concurrent.Executors
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -151,6 +152,24 @@ class WebToolsTest {
         assertEquals("https://example.com/2", sources[1].url)
     }
 
+    @Test fun `a first entry over the budget is cut, not dropped`() {
+        val list = WebSearchResult.list(listOf(WebResult("T", "https://example.com/" + "a".repeat(300), ""), WebResult("U", "https://b.example", "")), 100)
+        assertTrue(list.isNotEmpty())
+        assertTrue(list.length <= 100)
+        assertTrue(list.startsWith("1. T — https://example.com/"))
+        assertTrue(list.endsWith("…"))
+    }
+
+    @Test fun `a results page that merely mentions captcha is not a block`() {
+        val page = ddgPage.replace("Library support for", "How reCAPTCHA and captcha work: library support for")
+        assertFalse(DuckDuckGoLite.isBlocked(page))
+        val results = DuckDuckGoLite.results(200, page)!!
+        assertEquals(3, results.size)
+        assertTrue(results[1].snippet.contains("captcha"))
+        val http = FakeHttp { HttpResponse(200, page) }
+        assertEquals("DuckDuckGo", result(WebSearchTool("1", { true }, http), """{"query":"how does reCAPTCHA work"}""").text("source"))
+    }
+
     @Test fun `the transcript summary comes from the tool result and not from an error`() {
         val result = ToolResults.ok {
             put("query", "kotlin")
@@ -166,7 +185,7 @@ class WebToolsTest {
 
     private class FakeHttp(private val answer: (String) -> HttpResponse) : HttpGet {
         val calls = mutableListOf<Pair<String, Map<String, String>>>()
-        override fun get(url: String, headers: Map<String, String>): HttpResponse {
+        override suspend fun get(url: String, headers: Map<String, String>): HttpResponse {
             calls += url to headers
             return answer(url)
         }
@@ -224,6 +243,21 @@ class WebToolsTest {
             executor.shutdown()
         }
         assertEquals(listOf("web-io", "web-io", "web-io"), threads)
+    }
+
+    @Test fun `cancelling a request that is never answered disconnects it`() {
+        java.net.ServerSocket(0).use { server ->
+            val outcome = runBlocking {
+                val job = async(kotlinx.coroutines.Dispatchers.Default) {
+                    runCatching { UrlConnectionGet().get("http://127.0.0.1:${server.localPort}/", emptyMap()) }
+                }
+                server.accept() // the request arrived and will not be answered
+                kotlinx.coroutines.delay(200)
+                job.cancel()
+                kotlinx.coroutines.withTimeoutOrNull(5_000) { job.join() }
+            }
+            assertNotNull("cancel must end the blocked request promptly", outcome)
+        }
     }
 
     @Test fun `fetch_page reads through jina, only for web addresses, truncated`() {

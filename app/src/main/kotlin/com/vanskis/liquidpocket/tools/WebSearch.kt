@@ -61,7 +61,7 @@ object DuckDuckGoLite {
         return absolute.takeIf(WebText::isWebUrl)
     }
 
-    private val BLOCK_MARKERS = listOf("anomaly-modal", "anomaly.js", "challenge-form", "bots use duckduckgo", "captcha")
+    private val BLOCK_MARKERS = listOf("anomaly-modal", "anomaly.js", "challenge-form")
 
     /** True for the page DuckDuckGo shows instead of results when it suspects a bot. */
     fun isBlocked(html: String): Boolean = html.lowercase().let { page -> BLOCK_MARKERS.any { it in page } }
@@ -126,7 +126,11 @@ object WebSearchResult {
                 if (r.snippet.isNotEmpty()) append("\n   ").append(WebText.truncate(r.snippet, SNIPPET_CHARS, "…"))
             }
             val needed = entry.length + if (out.isEmpty()) 0 else 1
-            if (out.length + needed > maxChars) return out.toString()
+            if (out.length + needed > maxChars) {
+                // A first entry that alone is over budget is cut rather than dropping every result.
+                if (out.isEmpty()) out.append(WebText.truncate(entry, maxChars, "…"))
+                return out.toString()
+            }
             if (out.isNotEmpty()) out.append('\n')
             out.append(entry)
         }
