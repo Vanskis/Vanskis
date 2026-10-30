@@ -35,6 +35,9 @@ val LocalMathRenderer = staticCompositionLocalOf<MathRenderer?> { null }
 
 private const val MATH_ID = "math:"
 
+/** The text an inline formula image covers: the object replacement character. */
+internal const val IMAGE_TEXT = "\uFFFC"
+
 /**
  * The inline images for [formulas], keyed "math:<index>"; a formula that does not parse (or has no
  * renderer) is left out and [appendMath] shows its source instead. Wider than [maxWidthPx], a
@@ -59,7 +62,9 @@ internal fun mathInlineContent(
         val image = cache.getOrPut(formula) {
             renderer.render(if (formula.display) "\\displaystyle ${formula.latex}" else formula.latex, sizePx, argb)
         } ?: return@forEachIndexed
-        val fit = if (maxWidthPx > 0f && image.width > maxWidthPx) maxWidthPx / image.width else 1f
+        // A pixel short of the line, so rounding px -> sp -> px cannot make it overflow.
+        val room = maxWidthPx - 1f
+        val fit = if (room > 0f && image.width > room) room / image.width else 1f
         val placeholder = with(density) {
             Placeholder((image.width * fit).toSp(), (image.height * fit).toSp(), PlaceholderVerticalAlign.TextCenter)
         }
@@ -70,8 +75,13 @@ internal fun mathInlineContent(
     return content
 }
 
-/** Formula [index]: its image from [content], else its [source] in monospace. */
+/**
+ * Formula [index]: its image from [content], else its [source] in monospace.
+ *
+ * The image stands in for one character, not the source: a line could break at a space inside the
+ * source, and Compose drops an inline image whose text is split across lines, leaving a blank gap.
+ */
 internal fun AnnotatedString.Builder.appendMath(index: Int, source: String, content: Map<String, InlineTextContent>) {
     val id = "$MATH_ID$index"
-    if (id in content) appendInlineContent(id, source) else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(source) }
+    if (id in content) appendInlineContent(id, IMAGE_TEXT) else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(source) }
 }
