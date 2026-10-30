@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
+import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
 import com.vanskis.liquidpocket.engine.Engine
@@ -31,6 +32,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** Routing replies between the text model and the media model, one loaded at a time. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ModelSwapTest {
 
@@ -44,12 +46,9 @@ class ModelSwapTest {
         /** Per chat(): the model loaded and the params it was given. */
         val chats = mutableListOf<Pair<String, GenerationParams>>()
         val sent = mutableListOf<List<ChatMessage>>()
-        var chatFailure: Exception? = null
         var failLoadOf: String? = null
         /** When set, the next reply waits for it (or for [stop]) after its first text. */
         var hold: CompletableDeferred<Unit>? = null
-        /** Models that see images; any other refuses a message with images, as the native engine does. */
-        var visionModels = emptySet<String>()
 
         val loaded: String? get() = (state.value as? EngineState.Ready)?.modelPath
 
@@ -60,7 +59,7 @@ class ModelSwapTest {
                 throw EngineException("no memory")
             }
             state.value = EngineState.Ready(modelPath, config.contextSize)
-            capabilities.value = Capabilities.NONE.copy(vision = modelPath in visionModels)
+            capabilities.value = if (modelPath == MEDIA.path) OMNI else Capabilities.NONE
         }
 
         override suspend fun unload() {
@@ -74,13 +73,16 @@ class ModelSwapTest {
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
             chats += (loaded ?: "none") to params
             sent += messages
+            // As the native engine does, a model refuses media it cannot take.
             if (!capabilities.value.vision && messages.any { it.images.isNotEmpty() }) {
                 throw EngineException("The loaded model cannot see images")
+            }
+            if (!capabilities.value.audioIn && messages.any { it.audio.isNotEmpty() }) {
+                throw EngineException("The loaded model cannot hear audio")
             }
             val (text, calls) = replies.removeFirstOrNull() ?: ("Done" to emptyList())
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             hold?.let { it.await(); hold = null }
-            chatFailure?.let { throw it }
             calls.forEach { emit(ReplyChunk.ToolCall(it)) }
         }
     }
@@ -103,24 +105,16 @@ class ModelSwapTest {
         override suspend fun factTexts() = emptyList<String>()
     }
 
-    private class Models(var smartInstalled: Boolean = true) : ModelTargets {
-        var downloads = 0
-        override suspend fun resident() = RESIDENT
-        override suspend fun smart() = if (smartInstalled) SMART else null
-        override fun downloadSmart() {
-            downloads++
-        }
+    private class Models(var textInstalled: Boolean = true, var mediaInstalled: Boolean = true) : ModelTargets {
+        /** The context size set in Settings. */
+        var contextSize = TEXT.contextSize
+        override suspend fun text() = if (textInstalled) TEXT.copy(contextSize = contextSize) else null
+        override suspend fun media() = if (mediaInstalled) MEDIA else null
     }
 
-    private class ClockTool : Tool {
-        override val spec = ToolSpec("get_time", "The time.", """{"type":"object"}""")
-        override val needsConfirmation = false
-        val runs = mutableListOf<String>()
-        override fun describe(argumentsJson: String) = "time"
-        override suspend fun run(argumentsJson: String): ToolResult {
-            runs += argumentsJson
-            return ToolResult("""{"time":"10:00"}""")
-        }
+    private class Media : MediaLoader {
+        override fun image(path: String) = ImageInput(1, 1, ByteArray(3))
+        override fun audio(path: String, sampleRate: Int) = AudioInput(FloatArray(1))
     }
 
     /** Like look_at_photos: returns the photos for the model to see. */
@@ -135,206 +129,216 @@ class ModelSwapTest {
     private val engine = SwapEngine()
     private val store = Store()
     private val models = Models()
-    private val clock = ClockTool()
-    private val params = GenerationParams(tools = listOf(clock.spec), speak = true)
+    private val photos = PhotoTool()
+    private val params = GenerationParams(tools = listOf(photos.spec), speak = true)
+    private val photo = listOf(Attachment("/p.jpg", AttachmentKind.IMAGE))
+    private val voice = listOf(Attachment("/v.wav", AttachmentKind.AUDIO))
 
     private fun TestScope.controller() =
-        ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(clock), models = models)
+        ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(photos), media = Media(), models = models)
 
-    /** A conversation with one exchange on the resident model. */
-    private suspend fun TestScope.chatted(): ChatController {
+    @Test fun `a text turn loads the text model and is answered there`() = runTest {
         val c = controller()
-        c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath)
-        engine.replies += "Quick answer." to emptyList()
         c.send("What is 17 * 23?", params)
         advanceUntilIdle()
-        engine.loads.clear()
-        engine.chats.clear()
-        return c
+
+        assertEquals(listOf(TEXT.path), engine.loads)
+        assertEquals(TEXT.path, engine.chats.single().first)
+        val s = c.state.value
+        assertEquals(listOf("What is 17 * 23?", "Done"), s.turns.map { it.text })
+        assertNull(s.error)
+        assertFalse(s.busy)
     }
 
-    @Test fun `think harder swaps in the smart model for the reply and loads the resident back`() = runTest {
-        val c = chatted()
-        engine.replies += "391." to emptyList()
-        c.thinkHarder(params)
+    @Test fun `a photo turn goes to the media model`() = runTest {
+        val c = controller()
+        c.ensureLoaded()
+        advanceUntilIdle()
+        engine.loads.clear()
+        c.send("What is this?", params, photo)
         advanceUntilIdle()
 
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
+        assertEquals(listOf(MEDIA.path), engine.loads)
+        assertEquals(MEDIA.path, engine.chats.single().first)
+        assertTrue("the media model sees the photo", engine.sent.single().last().images.isNotEmpty())
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `a voice turn goes to the media model, which hears the clip and may speak`() = runTest {
+        val c = controller()
+        c.send("", params, voice)
+        advanceUntilIdle()
+
         val (model, sentParams) = engine.chats.single()
-        assertEquals(SMART.path, model)
-        assertFalse("the smart model does not speak", sentParams.speak)
-        assertEquals(listOf("get_time"), sentParams.tools.map { it.name })
-        val s = c.state.value
-        assertEquals(listOf("What is 17 * 23?", "391."), s.turns.map { it.text })
-        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
-        assertNull(s.swap)
-        assertFalse(s.busy)
+        assertEquals(MEDIA.path, model)
+        assertTrue(engine.sent.single().last().audio.isNotEmpty())
+        assertTrue(sentParams.speak)
+        assertNull(c.state.value.error)
     }
 
-    @Test fun `the state shows each phase of the swap`() = runTest {
-        val c = chatted()
-        val phases = mutableListOf<ModelSwap?>()
-        val watching = launch { c.state.collect { phases += it.swap } }
-        c.thinkHarder(params)
-        advanceUntilIdle()
-        watching.cancel()
-
-        assertEquals(listOf(null, ModelSwap.TO_SMART, ModelSwap.SMART, ModelSwap.BACK, null), phases.distinctUntilChangedList())
-    }
-
-    @Test fun `the resident is loaded back after the smart model fails`() = runTest {
-        val c = chatted()
-        engine.chatFailure = EngineException("decode failed")
-        c.thinkHarder(params)
-        advanceUntilIdle()
-
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
-        assertTrue(c.state.value.error!!.contains("decode failed"))
-        assertNull(c.state.value.swap)
-    }
-
-    @Test fun `the resident is loaded back after the smart model fails to load`() = runTest {
-        val c = chatted()
-        engine.failLoadOf = SMART.path
-        c.thinkHarder(params)
-        advanceUntilIdle()
-
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
-        assertTrue(engine.chats.isEmpty())
-        assertTrue(c.state.value.error!!.contains("no memory"))
-    }
-
-    @Test fun `the resident is loaded back after a stop`() = runTest {
-        val c = chatted()
-        engine.hold = CompletableDeferred()
-        engine.replies += "Let me wo" to emptyList()
-        c.thinkHarder(params)
-        advanceUntilIdle()
-        assertEquals(ModelSwap.SMART, c.state.value.swap)
-        assertTrue(c.state.value.busy)
-
-        c.stop()
-        advanceUntilIdle()
-
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
-        assertEquals("Let me wo", c.state.value.turns.last().text)
-        assertFalse(c.state.value.busy)
-    }
-
-    @Test fun `escalate hands the question to the smart model without running a tool`() = runTest {
+    @Test fun `after a media reply the next text turn goes back to the text model, and not before`() = runTest {
         val c = controller()
-        c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath)
-        engine.loads.clear()
-        engine.replies += "Let me think." to listOf(ToolCall(Escalate.NAME, """{"reason":"math"}"""))
-        engine.replies += "391." to emptyList()
-        c.send("What is 17 * 23?", params)
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        assertEquals("no swap back after the media reply", listOf(MEDIA.path), engine.loads)
+        assertEquals(MEDIA.path, engine.loaded)
+
+        c.send("And how old is it?", params)
         advanceUntilIdle()
 
-        val (residentModel, residentParams) = engine.chats[0]
-        assertEquals(RESIDENT.path, residentModel)
-        assertEquals(listOf("get_time", Escalate.NAME), residentParams.tools.map { it.name })
-        val (smartModel, smartParams) = engine.chats[1]
-        assertEquals(SMART.path, smartModel)
-        assertEquals("escalate is never offered to the smart model", listOf("get_time"), smartParams.tools.map { it.name })
-        assertEquals(listOf(Role.SYSTEM, Role.USER), engine.sent[1].map { it.role })
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
-        assertTrue(clock.runs.isEmpty())
-
-        val s = c.state.value
-        assertEquals(listOf(Role.USER, Role.ASSISTANT), s.turns.map { it.role })
-        assertEquals("391.", s.turns.last().text)
-        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
-        assertNull(s.confirmation)
-        assertFalse(s.busy)
+        assertEquals(listOf(MEDIA.path, TEXT.path), engine.loads)
+        assertEquals(TEXT.path, engine.chats.last().first)
+        // The earlier photo reaches the text model as a note, not as pixels it would refuse.
+        val earlier = engine.sent.last().first { it.role == Role.USER }
+        assertTrue(earlier.images.isEmpty())
+        assertTrue(earlier.content.endsWith(MediaNotes.IMAGE_UNSUPPORTED))
+        assertNull(c.state.value.error)
     }
 
-    @Test fun `escalate is not offered while the smart model is not installed`() = runTest {
-        models.smartInstalled = false
+    @Test fun `without the media model a photo turn goes to the text model with a note`() = runTest {
+        models.mediaInstalled = false
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+
+        assertEquals(listOf(TEXT.path), engine.loads)
+        assertEquals(MediaNotes.IMAGE_UNSUPPORTED, engine.sent.single().last().content.lines().last())
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `without the text model a text turn goes to the media model`() = runTest {
+        models.textInstalled = false
         val c = controller()
         c.send("hi", params)
         advanceUntilIdle()
 
-        assertEquals(listOf("get_time"), engine.chats.single().second.tools.map { it.name })
+        assertEquals(listOf(MEDIA.path), engine.loads)
+        assertEquals(MEDIA.path, engine.chats.single().first)
     }
 
-    @Test fun `think harder without the smart model starts its download and leaves the chat alone`() = runTest {
-        val c = chatted()
-        models.smartInstalled = false
-        val before = c.state.value
-        c.thinkHarder(params)
+    @Test fun `with no model installed the loaded model answers and nothing is loaded`() = runTest {
+        models.textInstalled = false
+        models.mediaInstalled = false
+        val c = controller()
+        c.ensureLoaded("/sideloaded.gguf", 8192)
+        engine.loads.clear()
+        c.ensureLoaded()
+        c.send("What is this?", params, photo)
         advanceUntilIdle()
 
-        assertEquals(1, models.downloads)
         assertTrue(engine.loads.isEmpty())
-        assertTrue(engine.chats.isEmpty())
-        assertEquals(before, c.state.value)
+        assertEquals("/sideloaded.gguf", engine.chats.single().first)
     }
 
-    @Test fun `tool photos reach a smart model that cannot see as a note instead`() = runTest {
-        engine.visionModels = setOf(RESIDENT.path)
-        val photos = PhotoTool()
-        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(clock, photos), models = models)
-        val withPhotos = params.copy(tools = listOf(clock.spec, photos.spec))
-        c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath)
-        engine.replies += "" to listOf(ToolCall("look_at_photos", "{}"))
-        engine.replies += "A cat." to emptyList()
-        c.send("What is in my latest photo?", withPhotos)
-        advanceUntilIdle()
-        assertTrue("the resident sees the photo", engine.sent.last().any { it.images.isNotEmpty() })
-        assertNull(c.state.value.error)
-
-        engine.replies += "" to listOf(ToolCall("look_at_photos", "{}"))
-        engine.replies += "A tabby cat on a sofa." to emptyList()
-        c.thinkHarder(withPhotos)
+    @Test fun `a media model that fails to load shows the error and asks nothing`() = runTest {
+        engine.failLoadOf = MEDIA.path
+        val c = controller()
+        c.send("What is this?", params, photo)
         advanceUntilIdle()
 
         val s = c.state.value
-        assertNull(s.error)
-        assertEquals("A tabby cat on a sofa.", s.turns.last().text)
-        val shown = engine.sent.last().single { it.role == Role.USER && it.content.startsWith("Photos from") }
-        assertTrue(shown.images.isEmpty())
-        assertTrue(shown.content.endsWith(MediaNotes.IMAGE_UNSUPPORTED))
-        assertTrue("the turn keeps its photos", s.turns.any { it.fromTool && it.images.isNotEmpty() })
-        assertEquals(RESIDENT.path, engine.loaded)
+        assertTrue(engine.chats.isEmpty())
+        assertTrue(s.error!!.contains("no memory"))
+        assertEquals(listOf(Role.USER), s.turns.map { it.role })
+        assertFalse(s.busy)
     }
 
-    @Test fun `opening the chat again during a swap leaves the smart reply running`() = runTest {
-        val c = chatted()
-        engine.hold = CompletableDeferred()
-        engine.replies += "Let me check the time." to listOf(ToolCall("get_time", "{}"))
-        engine.replies += "391, at 10:00." to emptyList()
-        c.thinkHarder(params)
+    @Test fun `ensureLoaded resolves the model through the targets and loads it once`() = runTest {
+        val c = controller()
+        c.ensureLoaded()
+        c.ensureLoaded()
+        assertEquals("a new chat routes to the text model", listOf(TEXT.path), engine.loads)
+
+        c.send("What is this?", params, photo)
         advanceUntilIdle()
-        assertEquals(ModelSwap.SMART, c.state.value.swap)
+        c.ensureLoaded()
+        assertEquals("the newest turn has a photo: the media model stays", listOf(TEXT.path, MEDIA.path), engine.loads)
+
+        c.newChat()
+        advanceUntilIdle()
+        c.ensureLoaded()
+        assertEquals(listOf(TEXT.path, MEDIA.path, TEXT.path), engine.loads)
+    }
+
+    @Test fun `a new context size reloads the routed model`() = runTest {
+        val c = controller()
+        c.ensureLoaded()
+        models.contextSize = 16384
+        c.ensureLoaded()
+
+        assertEquals(listOf(TEXT.path, TEXT.path), engine.loads)
+        assertEquals(EngineState.Ready(TEXT.path, 16384), engine.state.value)
+    }
+
+    @Test fun `regenerating or editing a photo turn stays on the media model`() = runTest {
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+
+        c.ensureLoaded(TEXT.path, TEXT.contextSize)
+        c.regenerate(params)
+        advanceUntilIdle()
+        assertEquals(MEDIA.path, engine.chats.last().first)
+
+        c.ensureLoaded(TEXT.path, TEXT.contextSize)
+        c.editAndResend("What breed is it?", params)
+        advanceUntilIdle()
+        assertEquals(MEDIA.path, engine.chats.last().first)
+        assertEquals("the edited turn keeps its photo", photo, c.state.value.turns[c.state.value.lastUserIndex].attachments)
+        assertTrue(engine.sent.last().last().images.isNotEmpty())
+        assertEquals(listOf(MEDIA.path, TEXT.path, MEDIA.path, TEXT.path, MEDIA.path), engine.loads)
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `opening the chat again during a media reply leaves it running`() = runTest {
+        val c = controller()
+        engine.hold = CompletableDeferred()
+        engine.replies += "Let me look again." to listOf(ToolCall("look_at_photos", "{}"))
+        engine.replies += "A tabby cat." to emptyList()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        assertTrue(c.state.value.generating)
 
         // What the chat screen does when it is shown again (a rotation, or back from Settings).
-        launch { c.ensureLoaded(RESIDENT.path, RESIDENT.contextSize, RESIDENT.mmprojPath) }
+        launch { c.ensureLoaded() }
         advanceUntilIdle()
-        assertEquals(ModelSwap.SMART, c.state.value.swap)
-        assertEquals(SMART.path, engine.loaded)
+        assertEquals(MEDIA.path, engine.loaded)
+        assertTrue(c.state.value.generating)
 
         engine.hold?.complete(Unit)
         advanceUntilIdle()
 
         val s = c.state.value
-        assertEquals("the smart reply's tool call ran", listOf("{}"), clock.runs)
-        assertEquals("391, at 10:00.", s.turns.last().text)
+        assertEquals("A tabby cat.", s.turns.last().text)
         assertNull(s.error)
-        assertEquals(listOf(SMART.path, RESIDENT.path), engine.loads)
-        assertEquals(RESIDENT.path, engine.loaded)
+        assertEquals(listOf(MEDIA.path), engine.loads)
         assertFalse(s.busy)
     }
 
-    private fun <T> List<T>.distinctUntilChangedList(): List<T> =
-        fold(mutableListOf()) { acc, x -> if (acc.isEmpty() || acc.last() != x) acc += x; acc }
+    @Test fun `think harder regenerates on the text model, thinking, with twice the tokens`() = runTest {
+        val c = controller()
+        c.think = false
+        c.send("What is this?", params.copy(maxNewTokens = 512), photo)
+        advanceUntilIdle()
+        assertFalse("the setting reaches the engine", engine.chats.single().second.think)
+
+        engine.replies += "A tabby cat, about two years old." to emptyList()
+        c.thinkHarder(params.copy(maxNewTokens = 512))
+        advanceUntilIdle()
+
+        val (model, sentParams) = engine.chats.last()
+        assertEquals(TEXT.path, model)
+        assertTrue(sentParams.think)
+        assertEquals(1024, sentParams.maxNewTokens)
+        val s = c.state.value
+        assertEquals(listOf("What is this?", "A tabby cat, about two years old."), s.turns.map { it.text })
+        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
+        assertFalse(s.busy)
+    }
 
     private companion object {
-        val RESIDENT = LoadTarget("/omni.gguf", "/omni-mmproj.gguf", 8192)
-        val SMART = LoadTarget("/smart.gguf", null, 8192)
+        val TEXT = LoadTarget("/lfm3-1.7b.gguf", null, 8192)
+        val MEDIA = LoadTarget("/lfm3-omni-2b.gguf", "/lfm3-omni-2b-mmproj.gguf", 8192)
+        val OMNI = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
     }
 }

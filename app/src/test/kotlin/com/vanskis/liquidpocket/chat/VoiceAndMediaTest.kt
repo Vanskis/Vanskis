@@ -1,7 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.engine.AudioInput
-import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ImageInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,27 +10,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceAndMediaTest {
-    private val omni = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
-    private val textOnly = Capabilities.NONE
 
-    @Test fun `the model speaks only when replies are spoken, it is chosen and it can`() {
-        assertTrue(VoiceRoute.modelSpeaks(true, VoiceEngine.MODEL, omni))
-        assertFalse(VoiceRoute.modelSpeaks(false, VoiceEngine.MODEL, omni))
-        assertFalse(VoiceRoute.modelSpeaks(true, VoiceEngine.ANDROID, omni))
-        assertFalse(VoiceRoute.modelSpeaks(true, VoiceEngine.MODEL, textOnly))
+    @Test fun `the model is asked to speak only when replies are spoken and it is chosen`() {
+        assertTrue(VoiceRoute.modelSpeaks(true, VoiceEngine.MODEL))
+        assertFalse(VoiceRoute.modelSpeaks(false, VoiceEngine.MODEL))
+        assertFalse(VoiceRoute.modelSpeaks(true, VoiceEngine.ANDROID))
     }
 
-    @Test fun `android speaks when replies are spoken and the model does not`() {
-        assertFalse(VoiceRoute.androidSpeaks(true, VoiceEngine.MODEL, omni))
-        assertTrue(VoiceRoute.androidSpeaks(true, VoiceEngine.MODEL, textOnly))
-        assertTrue(VoiceRoute.androidSpeaks(true, VoiceEngine.ANDROID, omni))
-        assertFalse(VoiceRoute.androidSpeaks(false, VoiceEngine.ANDROID, omni))
+    @Test fun `android speaks when replies are spoken and the model did not speak`() {
+        assertFalse(VoiceRoute.androidSpeaks(speakReplies = true, spoke = true))
+        assertTrue(VoiceRoute.androidSpeaks(speakReplies = true, spoke = false))
+        assertFalse(VoiceRoute.androidSpeaks(speakReplies = false, spoke = false))
+        assertFalse(VoiceRoute.androidSpeaks(speakReplies = false, spoke = true))
     }
 
-    @Test fun `the mic records for the model only when it hears and is chosen`() {
-        assertTrue(VoiceRoute.modelHears(VoiceEngine.MODEL, omni))
-        assertFalse(VoiceRoute.modelHears(VoiceEngine.ANDROID, omni))
-        assertFalse(VoiceRoute.modelHears(VoiceEngine.MODEL, omni.copy(audioIn = false, audioInSampleRate = 0)))
+    @Test fun `the mic records for the model only when it is chosen and a media model is installed`() {
+        assertTrue(VoiceRoute.modelHears(VoiceEngine.MODEL, mediaInstalled = true))
+        assertFalse(VoiceRoute.modelHears(VoiceEngine.ANDROID, mediaInstalled = true))
+        assertFalse(VoiceRoute.modelHears(VoiceEngine.MODEL, mediaInstalled = false))
+        assertEquals(16_000, VoiceRoute.RECORD_SAMPLE_RATE)
     }
 
     private class CountingLoader : MediaLoader {

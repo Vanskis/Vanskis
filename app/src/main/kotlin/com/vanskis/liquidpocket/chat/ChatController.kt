@@ -39,17 +39,17 @@ data class ChatState(
     val turns: List<Turn> = emptyList(),
     /** The reply being streamed, or null when not generating. */
     val streaming: String? = null,
+    /** The streamed reply's reasoning so far, or null when it has none (yet). */
+    val streamingThinking: String? = null,
     val loading: Boolean = false,
     val error: String? = null,
     /** A tool call waiting for the user's approval; the reply is paused (still [generating]) meanwhile. */
     val confirmation: ToolConfirmation? = null,
-    /** Set while a reply is swapped to the smart model and back; the chat is busy throughout. */
-    val swap: ModelSwap? = null,
 ) {
     val generating: Boolean get() = streaming != null
 
-    /** Loading, generating or swapping models: nothing new can start. */
-    val busy: Boolean get() = loading || generating || swap != null
+    /** Loading or generating: nothing new can start. */
+    val busy: Boolean get() = loading || generating
 
     /** Index of the newest turn the user wrote, -1 if there is none. Regenerate and edit act on it. */
     val lastUserIndex: Int get() = turns.indexOfLast { it.role == Role.USER && !it.fromTool }
@@ -76,9 +76,9 @@ const val MAX_TOOL_ROUNDS = 5
  * operation that touches [store] waits for the previous one, so writes land in the order they were made.
  * [media] decodes attachments for the engine; [sink] gets the reply's speech and its end.
  *
- * [models] names the resident and the smart model. [thinkHarder], or the resident model calling
- * [Escalate] (offered while the smart model is installed), loads the smart model in the resident's
- * place for one reply; the resident is loaded back however that reply ends.
+ * Each reply is routed through [models] ([route]): the media model when the newest user turn has
+ * photos or voice, the text model otherwise, loaded in place of the current one if need be. Nothing
+ * is swapped back after a reply; the next reply routes again. [clock] times the model's thinking.
  */
 class ChatController(
     private val engine: Engine,
@@ -89,6 +89,7 @@ class ChatController(
     private val media: MediaLoader = MediaLoader.NONE,
     private val sink: ReplySink = ReplySink.NONE,
     private val models: ModelTargets = ModelTargets.NONE,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -110,16 +111,37 @@ class ChatController(
     /** The request behind the engine's current model, as the engine may clamp the context size. */
     private var loadedFor: Pair<String, Int>? = null
 
+    /** Lets a model that thinks reason before answering ([GenerationParams.think]); [thinkHarder] always does. */
+    var think: Boolean = true
+
     /**
      * Loads [modelPath] (with its projector [mmprojPath]) and [contextSize] unless the engine already
-     * has exactly that loaded. Does nothing during a swap to the smart model, which loads the resident back as it ends.
+     * has exactly that loaded, stopping a reply in progress first.
      */
     suspend fun ensureLoaded(modelPath: String, contextSize: Int, mmprojPath: String? = null) {
         val target = LoadTarget(modelPath, mmprojPath, contextSize)
-        if (_state.value.swap != null || isLoaded(target)) return
-        // Outside the lock: an operation on the smart model loads the resident back, under it, as it ends.
+        if (isLoaded(target)) return
         stopAndWait(job)
         load(target)
+    }
+
+    /**
+     * Loads the model the open conversation's next reply routes to, unless it is loaded already.
+     * Does nothing while a reply is in progress, as a reply loads the model it needs itself, or
+     * when no model is installed.
+     */
+    suspend fun ensureLoaded() {
+        if (_state.value.generating) return
+        val target = route(_state.value.turns, textOnly = false) ?: return
+        if (isLoaded(target)) return
+        job?.join()
+        load(target)
+    }
+
+    /** The model for a reply to [turns], see [ModelTargets.route]; [textOnly] routes as if nothing was attached. */
+    private suspend fun route(turns: List<Turn>, textOnly: Boolean): LoadTarget? {
+        val newestUser = turns.lastOrNull { it.role == Role.USER && !it.fromTool }
+        return models.route(hasMedia = !textOnly && newestUser?.attachments.orEmpty().isNotEmpty())
     }
 
     /** Loads [target] unless it is loaded already; false when loading failed (the error is shown). */
@@ -159,7 +181,7 @@ class ChatController(
         val prompt = text.trim()
         val now = _state.value
         if ((prompt.isEmpty() && attachments.isEmpty()) || busy(now)) return false
-        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments), params = params)
+        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments), params = withThink(params))
         return true
     }
 
@@ -168,24 +190,18 @@ class ChatController(
         val now = _state.value
         val last = now.lastUserIndex
         if (last < 0 || busy(now)) return
-        reply(keep = last + 1, newUser = null, params = params)
+        reply(keep = last + 1, newUser = null, params = withThink(params))
     }
 
     /**
-     * Replaces the reply to the newest user turn with one from the smart model, swapping it in and
-     * the resident model back. When the smart model is not installed its download is started instead.
+     * Replaces the reply to the newest user turn with one from the text model (even after a photo or
+     * voice turn), always thinking, whatever [think] says, with twice the [GenerationParams.maxNewTokens].
      */
     fun thinkHarder(params: GenerationParams) {
-        if (!canRegenerate(_state.value)) return
-        scope.launch {
-            val smart = models.smart()
-            if (smart == null) {
-                models.downloadSmart()
-                return@launch
-            }
-            val now = _state.value
-            if (canRegenerate(now)) reply(keep = now.lastUserIndex + 1, newUser = null, params = params, smart = smart)
-        }
+        val now = _state.value
+        if (!canRegenerate(now)) return
+        val harder = params.copy(think = true, maxNewTokens = params.maxNewTokens * 2)
+        reply(keep = now.lastUserIndex + 1, newUser = null, params = harder, textOnly = true)
     }
 
     /** Replaces the newest user turn with [text], drops what followed it, and streams a new reply. */
@@ -195,7 +211,7 @@ class ChatController(
         val last = now.lastUserIndex
         if (prompt.isEmpty() || last < 0 || busy(now)) return
         val edited = now.turns[last].copy(text = prompt)
-        reply(keep = last, newUser = edited, params = params)
+        reply(keep = last, newUser = edited, params = withThink(params))
     }
 
     /** Ends the reply early; the text so far is kept as the assistant turn. A tool call awaiting approval is declined. */
@@ -244,6 +260,8 @@ class ChatController(
 
     private fun busy(state: ChatState) = state.busy
 
+    private fun withThink(params: GenerationParams) = params.copy(think = think)
+
     private fun canRegenerate(state: ChatState) = state.lastUserIndex >= 0 && !busy(state)
 
     private fun requestStop() {
@@ -256,21 +274,19 @@ class ChatController(
      * Keeps the first [keep] turns, appends [newUser] if given, and streams the assistant's reply to
      * the result, running the tools it calls. The store is brought to the same turns before the engine starts.
      *
-     * With [smart] the reply comes from that model, swapped in first. Otherwise the resident model
-     * is offered [Escalate] while the smart model is installed, and calling it hands the reply over.
-     * Either way the resident model is loaded back before the operation ends.
+     * The model the turns route to ([route], as if nothing was attached when [textOnly]) is loaded
+     * first if it is not already; when none is installed the loaded model answers.
      */
-    private fun reply(keep: Int, newUser: Turn?, params: GenerationParams, smart: LoadTarget? = null) {
+    private fun reply(keep: Int, newUser: Turn?, params: GenerationParams, textOnly: Boolean = false) {
         val before = _state.value
         val kept = before.turns.take(keep)
         val turns = if (newUser == null) kept else kept + newUser
         val dropped = before.turns.size > keep
         stopRequested = false
-        _state.update { it.copy(turns = turns, streaming = "", error = null) }
+        _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, error = null) }
         after { previous ->
             previous?.join()
             var conversationId = before.conversationId
-            var swapped = false
             try {
                 persist {
                     val id = conversationId
@@ -283,75 +299,40 @@ class ChatController(
                 if (stopRequested) return@after
                 val facts = persist { store.factTexts() }.orEmpty()
                 val system = ChatMessage(Role.SYSTEM, SystemPrompt.build(facts, tools = params.tools.isNotEmpty()))
-                // The smart model does not speak, and is never offered the hand-over to itself.
-                val smartParams = params.copy(speak = false, tools = params.tools.filterNot { it.name == Escalate.NAME })
-                val handOverTo = smart ?: models.smart()
-                var current = when {
-                    smart != null -> smartParams
-                    handOverTo != null -> params.copy(tools = params.tools + Escalate.SPEC)
-                    else -> params
-                }
-                if (smart != null) {
-                    swapped = true
-                    if (!swapIn(smart) || stopRequested) return@after
-                }
+                val target = route(turns, textOnly)
+                if (target != null && (!load(target) || stopRequested)) return@after
                 var rounds = 0
                 while (true) {
-                    val round = streamReply(system, current, conversationId, mayCallTools = rounds < MAX_TOOL_ROUNDS)
-                    if (round.escalated && handOverTo != null) {
-                        swapped = true
-                        if (!swapIn(handOverTo) || stopRequested) break
-                        current = smartParams
-                        continue
-                    }
-                    if (round.calls.isEmpty()) break
+                    val calls = streamReply(system, params, conversationId, mayCallTools = rounds < MAX_TOOL_ROUNDS)
+                    if (calls.isEmpty()) break
                     rounds++
-                    runTools(round.calls, conversationId)
+                    runTools(calls, conversationId)
                     if (stopRequested) break
                 }
             } finally {
-                try {
-                    if (swapped) swapBack()
-                } finally {
-                    _state.update { it.copy(streaming = null, confirmation = null, swap = null) }
-                }
+                _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
             }
         }
     }
 
-    /** Unloads the resident model and loads [smart]; false when that failed. */
-    private suspend fun swapIn(smart: LoadTarget): Boolean {
-        _state.update { it.copy(swap = ModelSwap.TO_SMART) }
-        val loaded = load(smart)
-        if (loaded) _state.update { it.copy(swap = ModelSwap.SMART) }
-        return loaded
-    }
-
-    /** Loads the resident model back after a swap, whether the smart model's reply finished, failed or was stopped. */
-    private suspend fun swapBack() {
-        _state.update { it.copy(swap = ModelSwap.BACK) }
-        models.resident()?.let { load(it) }
-    }
-
-    /** One streamed reply: the tool calls to run now, or [escalated] when it handed the question to the smart model. */
-    private class Round(val calls: List<ToolCall>, val escalated: Boolean = false)
-
     /**
-     * Streams one reply to [system] and the turns so far, and commits it. Returns the tool calls in it
-     * that are to run now (they are saved on the reply); none when it failed or was stopped. A reply
-     * that calls [Escalate] (when offered) is not committed: the smart model answers in its place.
+     * Streams one reply to [system] and the turns so far, and commits it with its thinking. Returns
+     * the tool calls in it that are to run now (they are saved on the reply); none when it failed or was stopped.
      */
     private suspend fun streamReply(
         system: ChatMessage,
         params: GenerationParams,
         conversationId: Long?,
         mayCallTools: Boolean,
-    ): Round {
+    ): List<ToolCall> {
         val statsBefore = engine.lastStats.value
         val calls = mutableListOf<ToolCall>()
         var failure: String? = null
         var toRun = emptyList<ToolCall>()
-        var escalated = false
+        var spoke = false
+        // When the model started and stopped thinking; it stops at the first chunk that is not thinking.
+        var thinkingFrom: Long? = null
+        var thinkingUntil: Long? = null
         try {
             val caps = engine.capabilities.value
             val turns = _state.value.turns
@@ -364,12 +345,19 @@ class ChatController(
                 }
                 .flowOn(work)
                 .collect { chunk ->
+                    if (chunk is ReplyChunk.Thinking) {
+                        if (thinkingFrom == null) thinkingFrom = clock()
+                    } else if (thinkingFrom != null && thinkingUntil == null) {
+                        thinkingUntil = clock()
+                    }
                     when (chunk) {
                         is ReplyChunk.Text -> _state.update { it.copy(streaming = (it.streaming ?: "") + chunk.text) }
-                        is ReplyChunk.Audio -> sink.audio(chunk.samples)
+                        is ReplyChunk.Thinking -> _state.update { it.copy(streamingThinking = (it.streamingThinking ?: "") + chunk.text) }
+                        is ReplyChunk.Audio -> {
+                            spoke = true
+                            sink.audio(chunk.samples)
+                        }
                         is ReplyChunk.ToolCall -> calls += chunk.call
-                        // Shown once the chat stores reasoning; until then it is not part of the reply.
-                        is ReplyChunk.Thinking -> Unit
                     }
                 }
         } catch (e: CancellationException) {
@@ -379,24 +367,24 @@ class ChatController(
         } finally {
             // Calls are run only when tools were offered, and not after a failure or a stop.
             val called = if (failure == null && !stopRequested && params.tools.isNotEmpty()) calls.toList() else emptyList()
-            escalated = mayCallTools && params.tools.any { it.name == Escalate.NAME } && called.any { it.name == Escalate.NAME }
-            if (escalated) {
-                // Dropped, with any other calls in it; the reply stays open for the smart model's answer.
-                _state.update { it.copy(streaming = "") }
-            } else {
-                toRun = commitReply(called, failure, mayCallTools, statsBefore, conversationId)
-            }
+            val thinkingMillis = thinkingFrom?.let { (thinkingUntil ?: clock()) - it }
+            toRun = commitReply(called, failure, mayCallTools, statsBefore, conversationId, thinkingMillis, spoke)
         }
-        return Round(toRun, escalated)
+        return toRun
     }
 
-    /** Commits the streamed reply with the [called] tools it may run; returns those to run now. */
+    /**
+     * Commits the streamed reply, with its thinking (which took [thinkingMillis]) and the [called]
+     * tools it may run; returns those to run now. [spoke] tells the sink the model spoke it.
+     */
     private suspend fun commitReply(
         called: List<ToolCall>,
         streamFailure: String?,
         mayCallTools: Boolean,
         statsBefore: GenerationStats?,
         conversationId: Long?,
+        thinkingMillis: Long?,
+        spoke: Boolean,
     ): List<ToolCall> {
         var failure = streamFailure
         if (called.isNotEmpty() && !mayCallTools) failure = "Stopped after $MAX_TOOL_ROUNDS rounds of tool use."
@@ -404,17 +392,26 @@ class ChatController(
         // Stats belong to this reply only if the engine published new ones for it.
         val stats = engine.lastStats.value?.takeIf { failure == null && it !== statsBefore }
         val text = _state.value.streaming.orEmpty()
-        val replyTurn = if (text.isEmpty() && toRun.isEmpty()) null else Turn(Role.ASSISTANT, text, stats, toolCalls = toRun)
+        val thinking = _state.value.streamingThinking?.takeIf { it.isNotBlank() }
+        val replyTurn = if (text.isEmpty() && toRun.isEmpty()) {
+            null
+        } else {
+            Turn(
+                Role.ASSISTANT, text, stats, toolCalls = toRun,
+                thinking = thinking, thinkingMillis = thinkingMillis.takeIf { thinking != null },
+            )
+        }
         _state.update {
             it.copy(
                 turns = if (replyTurn == null) it.turns else it.turns + replyTurn,
                 // Still generating while its tool calls run.
                 streaming = if (toRun.isEmpty()) null else "",
+                streamingThinking = null,
                 error = failure ?: it.error,
             )
         }
         // The reply has ended once no tools are left to run; a tool round's text is not its end.
-        if (text.isNotEmpty() && toRun.isEmpty()) sink.finished(text, completed = failure == null && !stopRequested)
+        if (text.isNotEmpty() && toRun.isEmpty()) sink.finished(text, completed = failure == null && !stopRequested, spoke = spoke)
         if (replyTurn != null) save(conversationId, replyTurn)
         return toRun
     }
@@ -515,7 +512,7 @@ class ChatController(
      */
     private fun Turn.toMessage(caps: Capabilities): ChatMessage {
         // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
-        // or as a note to a model that cannot see them (the smart model, after a swap).
+        // or as a note to a model that cannot see them (the text model). Thinking is never sent back.
         if (role != Role.USER || attachments.isEmpty()) {
             val unseen = images.isNotEmpty() && !caps.vision
             return ChatMessage(
