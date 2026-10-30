@@ -187,6 +187,7 @@ fun ChatLayout(
                             }
                         },
                         actions = {
+                            media.onLive?.let { IconButton(onClick = it) { Icon(AppIcons.GraphicEq, contentDescription = "Live voice") } }
                             media.speakReplies?.let { on ->
                                 IconButton(onClick = media.onToggleSpeakReplies) {
                                     Icon(

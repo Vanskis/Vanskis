@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
@@ -36,6 +37,8 @@ data class AppSettings(
     val think: Boolean = true,
     /** Ask the engine for the NPU (experimental); it falls back to the CPU when it cannot use it. */
     val useNpu: Boolean = false,
+    /** Who live voice talks to; null until chosen, which means Omni when installed ([LiveVoiceModel.resolve]). */
+    val liveVoiceModel: LiveVoiceModel? = null,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -62,6 +65,7 @@ class SettingsRepository(context: Context) {
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
                 think = prefs[THINK] ?: true,
                 useNpu = prefs[USE_NPU] ?: false,
+                liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
             )
         }
         .distinctUntilChanged()
@@ -102,6 +106,10 @@ class SettingsRepository(context: Context) {
         store.edit { it[USE_NPU] = value }
     }
 
+    suspend fun setLiveVoiceModel(value: LiveVoiceModel) {
+        store.edit { it[LIVE_VOICE_MODEL] = value.name }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
@@ -112,5 +120,6 @@ class SettingsRepository(context: Context) {
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val THINK = booleanPreferencesKey("think")
         val USE_NPU = booleanPreferencesKey("use_npu")
+        val LIVE_VOICE_MODEL = stringPreferencesKey("live_voice_model")
     }
 }

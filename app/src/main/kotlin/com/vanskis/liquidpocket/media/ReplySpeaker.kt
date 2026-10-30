@@ -2,6 +2,7 @@ package com.vanskis.liquidpocket.media
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 
 /**
  * Reads finished replies aloud with Android's text-to-speech, for models that cannot speak or when
@@ -13,11 +14,31 @@ class ReplySpeaker(context: Context) {
     private var ready = false
     private var pending: String? = null
     private var utterance = 0
+    /** The id of the last piece of the text being spoken; its end (done, error, stop) ends [busy]. */
+    @Volatile private var lastPiece: String? = null
+    @Volatile private var speaking = false
+
+    /** Whether text is waiting to be spoken or being spoken; false once its last piece ends or [stop] ran. */
+    val busy: Boolean get() = speaking
+
+    private val progress = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {}
+        override fun onDone(utteranceId: String?) = ended(utteranceId)
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) = ended(utteranceId)
+        override fun onError(utteranceId: String?, errorCode: Int) = ended(utteranceId)
+        override fun onStop(utteranceId: String?, interrupted: Boolean) = ended(utteranceId)
+
+        private fun ended(utteranceId: String?) {
+            if (utteranceId != null && utteranceId == lastPiece) speaking = false
+        }
+    }
 
     /** Speaks [markdown] as plain text, replacing whatever is being spoken. Main thread. */
     fun speak(markdown: String) {
         val text = SpeechText.from(markdown)
         if (text.isBlank()) return
+        speaking = true
         if (tts == null) {
             tts = TextToSpeech(app) { status ->
                 ready = status == TextToSpeech.SUCCESS
@@ -25,18 +46,20 @@ class ReplySpeaker(context: Context) {
                 pending = null
                 // A failed start is retried on the next reply.
                 if (!ready) release() else if (queued != null) say(queued)
-            }
+            }.also { it.setOnUtteranceProgressListener(progress) }
         }
         if (ready) say(text) else pending = text
     }
 
     fun stop() {
         pending = null
+        speaking = false
         if (ready) tts?.stop()
     }
 
     fun release() {
         pending = null
+        speaking = false
         tts?.shutdown()
         tts = null
         ready = false
@@ -46,9 +69,12 @@ class ReplySpeaker(context: Context) {
         val engine = tts ?: return
         // Long replies go in pieces under the engine's input limit, cut at paragraph or sentence ends.
         val pieces = split(text, TextToSpeech.getMaxSpeechInputLength() - 1)
+        val ids = pieces.map { "reply-${utterance++}" }
+        lastPiece = ids.lastOrNull()
+        if (ids.isEmpty()) speaking = false
         pieces.forEachIndexed { i, piece ->
             val mode = if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-            engine.speak(piece, mode, null, "reply-${utterance++}")
+            if (engine.speak(piece, mode, null, ids[i]) != TextToSpeech.SUCCESS && i == pieces.lastIndex) speaking = false
         }
     }
 

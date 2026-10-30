@@ -18,8 +18,19 @@ class Dictation(context: Context) {
     val available: Boolean
         get() = SpeechRecognizer.isOnDeviceRecognitionAvailable(app) || SpeechRecognizer.isRecognitionAvailable(app)
 
-    /** Listens until the user pauses; [onText] gets the best transcript, [onDone] always runs once at the end. */
-    fun start(onText: (String) -> Unit, onError: (String) -> Unit, onDone: () -> Unit) {
+    /**
+     * Listens until the user pauses; [onText] gets the best transcript, [onDone] always runs once at the end.
+     * For live voice: [onSpeechStart] runs when the user starts talking, [onLevel] gets the input level
+     * (dB, roughly -2 to 10), and [onNoSpeech], when given, takes hearing nothing instead of [onError].
+     */
+    fun start(
+        onText: (String) -> Unit,
+        onError: (String) -> Unit,
+        onDone: () -> Unit,
+        onSpeechStart: () -> Unit = {},
+        onLevel: (Float) -> Unit = {},
+        onNoSpeech: (() -> Unit)? = null,
+    ) {
         cancel()
         val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
         val r = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(app) else SpeechRecognizer.createSpeechRecognizer(app)
@@ -32,6 +43,12 @@ class Dictation(context: Context) {
             }
 
             override fun onError(error: Int) {
+                val nothingHeard = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                if (nothingHeard && onNoSpeech != null) {
+                    onNoSpeech()
+                    finish()
+                    return
+                }
                 onError(
                     when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't catch that. Try again."
@@ -53,8 +70,8 @@ class Dictation(context: Context) {
             }
 
             override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBeginningOfSpeech() = onSpeechStart()
+            override fun onRmsChanged(rmsdB: Float) = onLevel(rmsdB)
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onPartialResults(partialResults: Bundle?) {}
