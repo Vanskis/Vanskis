@@ -16,6 +16,7 @@ import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 import com.vanskis.liquidpocket.tools.Choices
+import com.vanskis.liquidpocket.tools.MathScript
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolCatalog
 import com.vanskis.liquidpocket.tools.ToolResult
@@ -400,9 +401,15 @@ class ChatController(
      */
     private fun offered(params: GenerationParams): GenerationParams {
         if (params.tools.isEmpty()) return params
-        val searches = _state.value.turns.filter { it.role == Role.TOOL && it.toolName == ToolCatalog.SEARCH }.map { it.text }
-        return params.copy(tools = ToolCatalog.offered(params.tools, ToolCatalog.loadedIn(searches)))
+        val turns = _state.value.turns
+        val searches = turns.filter { it.role == Role.TOOL && it.toolName == ToolCatalog.SEARCH }.map { it.text }
+        val loaded = ToolCatalog.loadedIn(searches)
+        val math = if (turns.any { it.asksMath() }) setOf(MathScript.TOOL) else emptySet()
+        return params.copy(tools = ToolCatalog.offered(params.tools, loaded + math))
     }
+
+    /** A message from the user that asks for math ([MathHint]). */
+    private fun Turn.asksMath() = role == Role.USER && !fromTool && MathHint.wanted(text)
 
     /** The system prompt for a reply with [params]: the remembered facts, tool guidance and custom instructions. */
     private suspend fun systemMessage(params: GenerationParams): ChatMessage {
@@ -418,7 +425,7 @@ class ChatController(
     }
 
     /** What the engine is sent for the turns so far: [system], then the newest summary and the turns after it. */
-    private suspend fun history(system: ChatMessage): List<ChatMessage> {
+    private suspend fun history(system: ChatMessage, params: GenerationParams): List<ChatMessage> {
         val caps = engine.capabilities.value
         val turns = _state.value.turns
         // Documents give the passages for the newest question, whichever turn attached them.
@@ -427,6 +434,7 @@ class ChatController(
         // The reply under way keeps its thinking between tool calls; once it has ended, its thinking goes.
         val replying = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Turn, Boolean>())
         if (asked >= 0) replying += turns.subList(asked + 1, turns.size)
+        val calculator = params.tools.any { it.name == MathScript.TOOL }
         return withContext(work) {
             // Media is decoded once per turn, not again for the count after the reply; documents are
             // read again when the question changes.
@@ -436,7 +444,11 @@ class ChatController(
             val history = Compaction.history(system, turns) { turn ->
                 val reused = previous[turn]?.takeIf { sameQuestion || turn.attachments.none { it.kind == AttachmentKind.DOCUMENT } }
                 val message = (reused ?: turn.toMessage(caps, question)).also { next[turn] = it }
-                if (turn in replying && !turn.thinking.isNullOrBlank()) message.copy(thinking = turn.thinking) else message
+                when {
+                    turn in replying && !turn.thinking.isNullOrBlank() -> message.copy(thinking = turn.thinking)
+                    calculator && turn.asksMath() -> message.copy(content = MathHint.hinted(message.content))
+                    else -> message
+                }
             }
             converted = next
             convertedFor = caps
@@ -453,7 +465,7 @@ class ChatController(
     /** Tokens the history takes as the engine counts it; the estimate from the newest reply's stats if it cannot. */
     private suspend fun contextUsed(system: ChatMessage, params: GenerationParams): Int =
         try {
-            val history = history(system)
+            val history = history(system, params)
             withContext(work) { engine.countTokens(history, offered(params).copy(speak = false)) }
         } catch (e: CancellationException) {
             throw e
@@ -552,7 +564,7 @@ class ChatController(
         var thinkingUntil: Long? = null
         try {
             val caps = engine.capabilities.value
-            val history = history(system)
+            val history = history(system, params)
             engine.chat(history, params.copy(speak = params.speak && caps.audioOut))
                 // Caught before flowOn so text already buffered still arrives after a failure.
                 .catch { e ->

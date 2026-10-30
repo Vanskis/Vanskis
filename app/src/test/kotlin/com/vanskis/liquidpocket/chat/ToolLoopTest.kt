@@ -9,6 +9,7 @@ import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.engine.GenerationStats
 import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.ReplyChunk
+import com.vanskis.liquidpocket.tools.MathScript
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 import com.vanskis.liquidpocket.engine.ToolSpec
@@ -143,6 +144,24 @@ class ToolLoopTest {
         c.send("thanks", params)
         advanceUntilIdle()
         assertTrue(engine.sent[2].none { it.thinking != null })
+    }
+
+    @Test fun `a message asking for math is hinted and has the calculator offered in full`() = runTest {
+        val calc = FakeTool(MathScript.TOOL, needsConfirmation = false)
+        val weather = FakeTool("get_weather", needsConfirmation = false)
+        val c = controller(clock, calc, weather)
+        val tools = GenerationParams(tools = listOf(clock.spec, calc.spec, weather.spec))
+        c.send("hello", tools)
+        advanceUntilIdle()
+        assertFalse(MathScript.TOOL in engine.offered[0])
+        assertFalse(engine.sent[0].last().content.contains(MathHint.HINT))
+
+        c.send("what is 4000 * 2 / 4?", tools)
+        advanceUntilIdle()
+        assertTrue(MathScript.TOOL in engine.offered[1])
+        assertFalse("get_weather" in engine.offered[1])
+        assertTrue(engine.sent[1].last().content.endsWith(MathHint.HINT))
+        assertFalse(engine.sent[1][1].content.contains(MathHint.HINT))
     }
 
     @Test fun `a write tool waits for the user's approval before it runs`() = runTest {
