@@ -79,6 +79,10 @@ fun SettingsScreen(
     // Seeded once and saved debounced, so typing is never overwritten by the stored value coming back.
     var instructions by rememberSaveable { mutableStateOf(settings.customInstructions) }
     var instructionsEdited by rememberSaveable { mutableStateOf(false) }
+    // Until the user edits, follow the stored value (the first frame may still show the defaults).
+    LaunchedEffect(settings.customInstructions) {
+        if (!instructionsEdited) instructions = settings.customInstructions
+    }
     LaunchedEffect(instructions) {
         if (!instructionsEdited) return@LaunchedEffect
         delay(INSTRUCTIONS_SAVE_DELAY_MS)
