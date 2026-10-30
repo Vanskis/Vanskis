@@ -30,8 +30,16 @@ object Engines {
     /** The process-wide llama.cpp engine. */
     fun llama(context: Context): Engine =
         llama ?: synchronized(this) {
-            llama ?: LlamaEngine(context.applicationContext.applicationInfo.nativeLibraryDir).also { llama = it }
+            llama ?: context.applicationContext.let { app ->
+                LlamaEngine(
+                    app.applicationInfo.nativeLibraryDir,
+                    NpuCrashGuard(File(app.noBackupFilesDir, NPU_CRASH_MARKER)),
+                ).also { llama = it }
+            }
         }
+
+    /** In noBackupFilesDir: a crash on one phone says nothing about the NPU of the next. */
+    private const val NPU_CRASH_MARKER = "npu-armed"
 }
 
 /**
@@ -39,7 +47,11 @@ object Engines {
  * thread-safe, and OpenMP keeps one worker pool per calling thread); [mutex] keeps a reply from
  * interleaving with another reply or a load while its flow is suspended in `emit`.
  */
-internal class LlamaEngine(private val nativeLibDir: String) : Engine {
+internal class LlamaEngine(
+    private val nativeLibDir: String,
+    /** Null in tests that never load a model. */
+    private val crashGuard: NpuCrashGuard? = null,
+) : Engine {
     private val dispatcher = Executors.newSingleThreadExecutor { r ->
         Thread(r, "lp-engine").apply { isDaemon = true }
     }.asCoroutineDispatcher()
@@ -66,6 +78,11 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
     override val npuAvailable: Boolean
         get() = File(nativeLibDir, NPU_LIB).isFile
 
+    override val npuCrashedLastRun: Boolean = crashGuard?.crashedLastRun == true
+
+    /** Set from an NPU load until its first reply runs to the end; engine thread. */
+    private var npuUnproven = false
+
     /** Starts the NPU backend (once); returns why it cannot be used, or null. Engine thread. */
     private fun initNpu(): String? {
         if (!npuTried) {
@@ -73,6 +90,12 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
             npuTried = true
         }
         return npuError
+    }
+
+    /** The NPU is proven or no longer in use: a later death of the process is not its doing. Engine thread. */
+    private fun disarmNpu() {
+        npuUnproven = false
+        crashGuard?.disarm()
     }
 
     override suspend fun load(modelPath: String, config: EngineConfig) {
@@ -94,11 +117,16 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     requireReadable(modelPath, "Model")
                     config.mmprojPath?.let { requireReadable(it, "Projector") }
                     val threads = ThreadPolicy.threadsFor(Runtime.getRuntime().availableProcessors())
-                    val outcome = AcceleratorFallback.load(config.accelerator, npuAvailable, ::initNpu) { acc ->
+                    // Armed before the NPU is touched: starting it or loading on it can abort the process too.
+                    val initNpuGuarded = { crashGuard?.arm(); initNpu() }
+                    val outcome = AcceleratorFallback.load(
+                        config.accelerator, npuAvailable, initNpuGuarded, npuCrashedLastRun,
+                    ) { acc ->
                         LlamaNative.nativeLoad(
                             modelPath, config.mmprojPath, config.contextSize, threads, acc == Accelerator.NPU,
                         )
                     }
+                    if (outcome.accelerator == Accelerator.NPU) npuUnproven = true else disarmNpu()
                     outcome.note?.let { Log.w(TAG, it) }
                     val caps = NativeCapabilities.of(LlamaNative.nativeCapabilities())
                     val ready = EngineState.Ready(modelPath, outcome.value, outcome.accelerator, outcome.note)
@@ -107,8 +135,11 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     _capabilities.value = caps
                     _state.value = ready
                 } catch (e: CancellationException) {
+                    disarmNpu()
                     throw e
                 } catch (e: Throwable) {
+                    // The process survived, and no model is left on the NPU.
+                    disarmNpu()
                     // Throwable: System.loadLibrary fails with UnsatisfiedLinkError.
                     throw fail("Could not load the model", e)
                 }
@@ -125,6 +156,7 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     _capabilities.value = Capabilities.NONE
                     LlamaNative.nativeUnload()
                 }
+                disarmNpu()
                 _state.value = EngineState.Idle
             }
         }
@@ -277,6 +309,8 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                 }
                 // After stop() the reply is cut short: no tool calls, and no held-back text or audio.
                 if (stopRequested) return@withLock
+                // Prefill and decoding ran to the end on the loaded accelerator: the NPU, if that, works.
+                if (npuUnproven) disarmNpu()
                 // The speech decoder holds back the end of the last frame, also when maxNewTokens cut the reply.
                 if (speaking) native { LlamaNative.nativeTakeAudio(flush = true) }?.let { emit(ReplyChunk.Audio(it)) }
 

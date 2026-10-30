@@ -55,6 +55,12 @@ interface Engine {
     val npuAvailable: Boolean get() = false
 
     /**
+     * Whether the NPU took the previous process down. A native NPU error aborts the process, so this
+     * is how it is learned; [load] then uses the CPU for [Accelerator.NPU] for the rest of this process.
+     */
+    val npuCrashedLastRun: Boolean get() = false
+
+    /**
      * Decode speed of the loaded model on each accelerator: a short fixed prompt and 32 generated
      * tokens on the CPU, then on the NPU when [npuAvailable]. Reloads the model as needed and leaves it
      * loaded as it was. Throws [EngineException] without a loaded model.

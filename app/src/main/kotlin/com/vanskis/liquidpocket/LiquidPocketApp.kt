@@ -19,6 +19,8 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlin.concurrent.thread
 
 /** The main model: text, thinking and tools. The chat opens once it is installed. */
@@ -52,5 +54,9 @@ class LiquidPocketApp : Application() {
         thread(name = "retire-models") { runCatching { installer.deleteById(RETIRED_MODEL_ID) } }
         // Shared copies from a previous process; the in-memory inbox that listed them is empty now.
         thread(name = "clear-shared") { SharedDocuments.clearStored(this) }
+        // The NPU took the last process down (a native abort): asking for it again would crash the next reply.
+        appScope.launch {
+            if (engine.npuCrashedLastRun && settings.settings.first().useNpu) settings.setUseNpu(false)
+        }
     }
 }
