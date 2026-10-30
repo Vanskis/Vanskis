@@ -17,6 +17,7 @@ import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 import com.vanskis.liquidpocket.tools.Choices
 import com.vanskis.liquidpocket.tools.Tool
+import com.vanskis.liquidpocket.tools.ToolCatalog
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
 import com.vanskis.liquidpocket.tools.WebTools
@@ -366,7 +367,7 @@ class ChatController(
                 }
                 var rounds = 0
                 while (true) {
-                    val calls = streamReply(system, params, conversationId, mayCallTools = rounds < MAX_TOOL_ROUNDS)
+                    val calls = streamReply(system, offered(params), conversationId, mayCallTools = rounds < MAX_TOOL_ROUNDS)
                     if (calls.isEmpty()) break
                     rounds++
                     runTools(calls, conversationId)
@@ -384,6 +385,16 @@ class ChatController(
 
     /** Counts [reply] calls; each operation clears the streaming state only while its reply is the newest. */
     private var newestReply = 0L
+
+    /**
+     * [params] with the tools this conversation sees in full: the core ones and those its
+     * [ToolCatalog.SEARCH] calls loaded, the rest only named ([ToolCatalog.offered]).
+     */
+    private fun offered(params: GenerationParams): GenerationParams {
+        if (params.tools.isEmpty()) return params
+        val searches = _state.value.turns.filter { it.role == Role.TOOL && it.toolName == ToolCatalog.SEARCH }.map { it.text }
+        return params.copy(tools = ToolCatalog.offered(params.tools, ToolCatalog.loadedIn(searches)))
+    }
 
     /** The system prompt for a reply with [params]: the remembered facts, tool guidance and custom instructions. */
     private suspend fun systemMessage(params: GenerationParams): ChatMessage {
@@ -429,7 +440,7 @@ class ChatController(
     private suspend fun contextUsed(system: ChatMessage, params: GenerationParams): Int =
         try {
             val history = history(system)
-            withContext(work) { engine.countTokens(history, params.copy(speak = false)) }
+            withContext(work) { engine.countTokens(history, offered(params).copy(speak = false)) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -660,6 +671,8 @@ class ChatController(
     }
 
     private suspend fun runTool(call: ToolCall): ToolResult {
+        // A deferred tool is run when called by name, loaded or not.
+        if (call.name == ToolCatalog.SEARCH) return ToolResult(ToolCatalog.search(lastParams.tools, call.argumentsJson))
         val tool = tools.firstOrNull { it.spec.name == call.name }
             ?: return ToolResult(ToolResults.error("There is no tool named ${call.name}."))
         return try {

@@ -15,6 +15,7 @@ import com.vanskis.liquidpocket.engine.ToolSpec
 import com.vanskis.liquidpocket.tools.Choices
 import com.vanskis.liquidpocket.tools.OfferChoicesTool
 import com.vanskis.liquidpocket.tools.Tool
+import com.vanskis.liquidpocket.tools.ToolCatalog
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -43,6 +44,7 @@ class ToolLoopTest {
         val replies = ArrayDeque<Pair<String, List<ToolCall>>>()
         var always: Pair<String, List<ToolCall>>? = null
         val sent = mutableListOf<List<ChatMessage>>()
+        val offered = mutableListOf<List<String>>()
 
         override suspend fun load(modelPath: String, config: EngineConfig) = Unit
         override suspend fun unload() = Unit
@@ -50,6 +52,7 @@ class ToolLoopTest {
 
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
             sent += messages
+            offered += params.tools.map { it.name }
             val (text, calls) = replies.removeFirstOrNull() ?: always ?: ("Done" to emptyList())
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             calls.forEach { emit(ReplyChunk.ToolCall(it)) }
@@ -255,6 +258,22 @@ class ToolLoopTest {
         val results = c.state.value.turns.filter { it.role == Role.TOOL }.map { it.text }
         assertEquals(listOf(ToolResults.error("There is no tool named nope."), ToolResults.error("start is missing")), results)
         assertEquals("Done", c.state.value.turns.last().text)
+    }
+
+    @Test fun `a tool loaded with tool_search is offered in full from then on`() = runTest {
+        engine.replies += "" to listOf(call(ToolCatalog.SEARCH, """{"names":["create_note"]}"""))
+        engine.replies += "Loaded." to emptyList()
+        val c = controller()
+        c.send("make a note", params)
+        advanceUntilIdle()
+
+        assertEquals(listOf("get_time", ToolCatalog.SEARCH), engine.offered[0])
+        assertEquals(listOf("get_time", "create_note"), engine.offered[1])
+        assertTrue(c.state.value.turns[2].text.contains("\"loaded\":[\"create_note\"]"))
+
+        c.send("again", params)
+        advanceUntilIdle()
+        assertEquals(listOf("get_time", "create_note"), engine.offered[2])
     }
 
     @Test fun `tool calls are not run when no tools were offered`() = runTest {

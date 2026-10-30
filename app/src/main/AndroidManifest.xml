@@ -19,6 +19,11 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- The open_app tool finds apps by their home-screen names. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <!-- Tools: each runtime permission is asked for when a tool first needs it. -->
@@ -27,6 +32,9 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Phone controls: Do Not Disturb and silent mode (the user allows it in settings), and brightness. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".LiquidPocketApp"

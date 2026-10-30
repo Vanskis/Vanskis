@@ -37,7 +37,9 @@ object SystemPrompt {
     const val TOOLS_LINE =
         "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
             "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them. " +
-            "When a few clear answers fit, let the user tap one with offer_choices."
+            "When a few clear answers fit, let the user tap one with offer_choices. " +
+            "More tools (math, weather, phone controls and others) are listed in tool_search: load one there, then call it. " +
+            "For any calculation or unit conversion, use the calculate tool rather than working it out yourself."
 
     /** Said when the tools include web search. */
     const val WEB_SEARCH_LINE = "For current events, or facts you are unsure of, use web_search."

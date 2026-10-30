@@ -17,14 +17,17 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.put
 
 /**
- * The only tools that send anything off the phone: the query or the address goes to DuckDuckGo,
- * Wikipedia or Jina. They run without asking, and only while [enabled] (the Web search setting);
+ * The only tools that send anything off the phone: the query, place, topic or address goes to
+ * DuckDuckGo, Wikipedia, Jina, Open-Meteo or Frankfurter. They run without asking, and only while [enabled] (the Web search setting);
  * the chat also stops offering them when it is off.
  */
 object WebTools {
     const val SEARCH = "web_search"
     const val FETCH = "fetch_page"
-    val NAMES = setOf(SEARCH, FETCH)
+    const val WEATHER = "get_weather"
+    const val WIKIPEDIA = "wikipedia"
+    const val CURRENCY = "convert_currency"
+    val NAMES = setOf(SEARCH, FETCH, WEATHER, WIKIPEDIA, CURRENCY)
 
     const val OFF = "Web search is turned off in Liquid Pocket's settings. Answer without it, or tell the user they can turn it on."
 
