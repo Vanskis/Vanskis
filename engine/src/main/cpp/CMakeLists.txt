@@ -33,6 +33,9 @@ if(LP_HEXAGON)
         message(FATAL_ERROR "LP_HEXAGON needs HEXAGON_SDK_ROOT (the unpacked Hexagon SDK)")
     endif()
     set(GGML_HEXAGON ON CACHE BOOL "" FORCE)
+    # The SDK's hexagon_fun.cmake picks its prebuilt host libraries from this (llama.cpp's
+    # snapdragon preset sets the same); left empty, its string(FIND) calls fail at configure.
+    set(PREBUILT_LIB_DIR android_aarch64 CACHE STRING "" FORCE)
 endif()
 
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp)
