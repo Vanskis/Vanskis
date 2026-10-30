@@ -41,6 +41,9 @@
 //     common_chat_params common_chat_templates_apply(const common_chat_templates * tmpls,
 //                                                    const common_chat_templates_inputs & inputs);
 //     common_chat_templates_inputs { messages, add_generation_prompt, use_jinja, enable_thinking, ... }
+//                   // enable_thinking is passed to the jinja template as its enable_thinking variable
+//                   // (common_chat_template_direct_apply_impl); LFM3's ends the generation prompt with
+//                   // "<think>" when true, "<think></think>" when false.
 //     common_chat_params::prompt is a common_chat_prompt { parts: [{ text, is_input }] }; when the vocab
 //     adds BOS, the template's leading bos_token text is already stripped from parts[0].
 //     common_chat_templates_inputs { messages, tools, parallel_tool_calls, add_generation_prompt, use_jinja,
@@ -49,6 +52,9 @@
 //     common_chat_tool { name, description, parameters }   // parameters: JSON schema as a string
 //     common_chat_params { format, prompt, grammar, grammar_lazy, generation_prompt, thinking_start_tag,
 //                          thinking_end_tags, grammar_triggers, preserved_tokens, parser, ... }
+//                   // LFM3's template (it has <tool_call>, <function=, <parameter=) maps to
+//                   // common_chat_params_init_qwen3_coder: thinking_start_tag "<think>", thinking_end_tags
+//                   // { "\n</think>", "</think>", "<tool_call>" }, lazy grammar trigger word "<tool_call>".
 //     common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const std::string & text);
 //     void common_chat_input::append(const std::string & piece, llama_token token);
 //     common_chat_parser_params { format, generation_prompt, debug, parser }
@@ -110,6 +116,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <exception>
 #include <memory>
@@ -456,10 +463,12 @@ bitmaps make_bitmaps(JNIEnv * env, const prompt_args & a) {
     return out;
 }
 
-// Renders the conversation with the model's jinja template, thinking disabled, ending with the
-// assistant generation prompt. With a projector loaded, a user turn gets one media marker per
-// media item before its text. Throws std::exception on template errors.
-common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers) {
+// Renders the conversation with the model's own jinja template from the GGUF (never the legacy
+// built-in templates, which take LFM3 for plain ChatML), ending with the assistant generation prompt.
+// `think` is the template's enable_thinking (ignored by templates without thinking). With a
+// projector loaded, a user turn gets one media marker per media item before its text. Throws
+// std::exception on template errors.
+common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers, bool think) {
     const auto roles = jints_to_std(env, a.roles);
     const auto contents = jbytes_array_to_std(env, a.contents);
     const auto tool_names = jbytes_array_to_std(env, a.tool_names);
@@ -473,8 +482,8 @@ common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
     inputs.add_generation_prompt = true;
-    inputs.enable_thinking = false;
-    // Lets the template's parser take the (empty) think block apart from the content.
+    inputs.enable_thinking = think;
+    // Lets the template's parser take the think block apart from the content.
     inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
     inputs.parallel_tool_calls = true;
     for (size_t i = 0; i < roles.size(); ++i) {
@@ -728,12 +737,12 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeCountPromptTokens(
         JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents, jobjectArray tool_names,
         jobjectArray tool_calls, jintArray media_msg, jintArray media_kind, jintArray media_dims,
-        jobjectArray media_data, jobjectArray tools) {
+        jobjectArray media_data, jobjectArray tools, jboolean jthink) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return 0; }
     const prompt_args a { roles, contents, tool_names, tool_calls, media_msg, media_kind, media_dims, media_data, tools };
     try {
         const bool has_media = env->GetArrayLength(media_kind) > 0;
-        const auto params = render(env, a, has_media);
+        const auto params = render(env, a, has_media, jthink == JNI_TRUE);
         if (!has_media) return static_cast<jint>(tokenize_from(params.prompt, 0).size());
         if (g_mtmd == nullptr) throw std::runtime_error("media needs a multimodal projector");
         const auto bms = make_bitmaps(env, a);
@@ -752,18 +761,19 @@ extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
         JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents, jobjectArray tool_names,
         jobjectArray tool_calls, jintArray media_msg, jintArray media_kind, jintArray media_dims,
-        jobjectArray media_data, jobjectArray tools, jfloat temperature, jboolean jspeak) {
+        jobjectArray media_data, jobjectArray tools, jfloat temperature, jboolean jspeak, jboolean jthink) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return nullptr; }
     settle_speech();
     reset_speech();
     reset_pending();
     const prompt_args a { roles, contents, tool_names, tool_calls, media_msg, media_kind, media_dims, media_data, tools };
     const bool has_media = env->GetArrayLength(media_kind) > 0;
+    const bool think = jthink == JNI_TRUE;
 
     common_chat_params params;
     bool speak = false;
     try {
-        params = render(env, a, has_media);
+        params = render(env, a, has_media, think);
         if (jspeak && g_gen.valid()) {
             // The helper decodes the generation prompt itself and opens the spoken block after it,
             // as the realtime slot passes it the assistant header (server-realtime.cpp, on_response_create).
@@ -775,7 +785,7 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
             if (speak) {
                 g_speak_header = header;
             } else {
-                params = render(env, a, has_media);
+                params = render(env, a, has_media, think);
                 LOGw("The prompt does not end with the generation prompt; replying in text only");
             }
         }
@@ -893,19 +903,30 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
     return out;
 }
 
-// What the streamed text of a reply must hold back, for the given conversation and tools, as three
-// arrays: [the thinking start tag, if any], [thinking end tags], [words that start a tool call].
+// What the streamed text of a reply must hold back, for the given conversation and tools, as four
+// arrays: [the thinking start tag, if any], [thinking end tags], [words that start a tool call],
+// [the thinking start tag, if the generation prompt already opens the think block].
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeReplyMarkers(
         JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents, jobjectArray tool_names,
-        jobjectArray tool_calls, jobjectArray tools) {
+        jobjectArray tool_calls, jobjectArray tools, jboolean jthink) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return nullptr; }
     jintArray none = env->NewIntArray(0);
     const prompt_args a { roles, contents, tool_names, tool_calls, none, none, none, nullptr, tools };
-    std::vector<std::string> start, ends, tool_starts;
+    std::vector<std::string> start, ends, tool_starts, opened;
     try {
-        const auto params = render(env, a, /* with_markers */ false);
-        if (!params.thinking_start_tag.empty()) start.push_back(params.thinking_start_tag);
+        const auto params = render(env, a, /* with_markers */ false, jthink == JNI_TRUE);
+        const std::string & tag = params.thinking_start_tag;
+        if (!tag.empty()) {
+            start.push_back(tag);
+            // LFM3 with thinking: the generation prompt ends "<|im_start|>assistant\n<think>", so the
+            // model starts with its reasoning and never writes the tag itself.
+            std::string gen = params.generation_prompt;
+            while (!gen.empty() && std::isspace(static_cast<unsigned char>(gen.back()))) gen.pop_back();
+            if (gen.size() >= tag.size() && gen.compare(gen.size() - tag.size(), tag.size(), tag) == 0) {
+                opened.push_back(tag);
+            }
+        }
         ends = params.thinking_end_tags;
         for (const auto & t : params.grammar_triggers) {
             if (t.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) tool_starts.push_back(t.value);
@@ -916,9 +937,9 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeReplyMarkers(
     }
     jclass cls = env->FindClass("[[B");
     if (cls == nullptr) return nullptr;
-    jobjectArray out = env->NewObjectArray(3, cls, nullptr);
-    const std::vector<std::string> * groups[3] = { &start, &ends, &tool_starts };
-    for (jsize i = 0; out != nullptr && i < 3; ++i) {
+    jobjectArray out = env->NewObjectArray(4, cls, nullptr);
+    const std::vector<std::string> * groups[4] = { &start, &ends, &tool_starts, &opened };
+    for (jsize i = 0; out != nullptr && i < 4; ++i) {
         jobjectArray g = to_jbytes_array(env, *groups[i]);
         env->SetObjectArrayElement(out, i, g);
         env->DeleteLocalRef(g);

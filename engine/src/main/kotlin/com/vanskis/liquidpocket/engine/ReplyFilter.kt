@@ -1,13 +1,16 @@
 package com.vanskis.liquidpocket.engine
 
 /**
- * Turns the raw text of a reply as it streams into the text to show: drops a leading thinking
- * block (from [thinkStart] to one of [thinkEnds]) and stops at the first of [toolStarts], after
- * which the reply is tool-call markup that [complete] hands over to the template's parser.
+ * Splits the raw text of a reply as it streams into the thinking and the text to show: a leading
+ * thinking block (from [thinkStart] to one of [thinkEnds]) comes out as [Shown.thinking], the rest as
+ * [Shown.text] up to the first of [toolStarts], after which the reply is tool-call markup that
+ * [complete] hands over to the template's parser. With [startInThink] the prompt already opened the
+ * block (its generation prompt ends with [thinkStart]), so the reply starts inside it.
  *
  * A marker can arrive split over several tokens, so any suffix that could begin one is held back,
  * together with the whitespace before it (the parser trims content, and text before a tool call
- * usually ends in a newline). Leading whitespace is never shown.
+ * usually ends in a newline). Leading and trailing whitespace of the thinking and of the text is never
+ * shown. A think end that is also a tool start (`<tool_call>` for LFM3) ends the thinking and starts the markup.
  *
  * The markers come from [LlamaNative.nativeReplyMarkers]; empty lists disable that stage.
  */
@@ -15,7 +18,11 @@ internal class ReplyFilter(
     private val thinkStart: String?,
     private val thinkEnds: List<String>,
     private val toolStarts: List<String>,
+    startInThink: Boolean = false,
 ) {
+    /** What one call made showable: [thinking] comes before [text] in the reply. Either may be empty. */
+    data class Shown(val thinking: String, val text: String)
+
     private enum class State {
         /** Nothing shown yet: skipping whitespace, waiting to see whether a think block opens. */
         START,
@@ -27,8 +34,14 @@ internal class ReplyFilter(
         MARKUP,
     }
 
-    private var state = State.START
-    private var thinkDone = thinkStart.isNullOrEmpty()
+    private var state = if (startInThink) State.THINK else State.START
+    private var thinkDone = startInThink || thinkStart.isNullOrEmpty()
+
+    /** In the think block and nothing of it shown yet: its leading whitespace is skipped. */
+    private var thinkLead = startInThink
+
+    /** True while the reply is inside the think block. */
+    val thinking: Boolean get() = state == State.THINK
 
     /** Received text not yet shown or dropped. */
     private val pending = StringBuilder()
@@ -36,10 +49,11 @@ internal class ReplyFilter(
     /** All text returned by [append] so far. */
     private val shown = StringBuilder()
 
-    /** Feeds the next piece of the reply; returns the text that can be shown now (possibly empty). */
-    fun append(text: String): String {
-        if (state == State.MARKUP) return ""
+    /** Feeds the next piece of the reply; returns the thinking and text that can be shown now. */
+    fun append(text: String): Shown {
+        if (state == State.MARKUP) return NOTHING
         pending.append(text)
+        val think = StringBuilder()
         val out = StringBuilder()
         while (true) {
             when (state) {
@@ -52,6 +66,7 @@ internal class ReplyFilter(
                         if (pending.startsWith(start)) {
                             pending.deleteRange(0, start.length)
                             thinkDone = true
+                            thinkLead = true
                             state = State.THINK
                             continue
                         }
@@ -61,13 +76,23 @@ internal class ReplyFilter(
                     state = State.TEXT
                 }
                 State.THINK -> {
+                    if (thinkLead) {
+                        val lead = pending.indexOfFirst { !it.isWhitespace() }
+                        pending.deleteRange(0, if (lead < 0) pending.length else lead)
+                        if (pending.isEmpty()) break
+                        thinkLead = false
+                    }
                     val (at, end) = earliest(thinkEnds)
                     if (end != null) {
-                        pending.deleteRange(0, at + end.length)
+                        think.append(pending, 0, trimTrailingWhitespace(at))
+                        // A tool start that ends the thinking stays: the text state turns it into markup.
+                        pending.deleteRange(0, if (end in toolStarts) at else at + end.length)
                         state = State.START
                         continue
                     }
-                    pending.deleteRange(0, pending.length - partialMarkerLength(thinkEnds))
+                    val cut = trimTrailingWhitespace(pending.length - partialMarkerLength(thinkEnds))
+                    think.append(pending, 0, cut)
+                    pending.deleteRange(0, cut)
                     break
                 }
                 State.TEXT -> {
@@ -89,19 +114,21 @@ internal class ReplyFilter(
             }
         }
         shown.append(out)
-        return out.toString()
+        return if (think.isEmpty() && out.isEmpty()) NOTHING else Shown(think.toString(), out.toString())
     }
 
     /**
      * Returns the rest of the reply to show once it has ended. [parsedContent] is the content the
      * template's parser extracted, or null if parsing failed: then the held-back text that is not
-     * markup (or thinking) is returned instead.
+     * markup is returned instead. A reply that ended inside its think block has no text; the
+     * held-back rest of its thinking is returned.
      */
-    fun complete(parsedContent: String?): String {
-        if (parsedContent != null && parsedContent.startsWith(shown)) return parsedContent.substring(shown.length)
+    fun complete(parsedContent: String?): Shown {
+        if (state == State.THINK) return Shown(pending.toString().trimEnd(), "")
+        if (parsedContent != null && parsedContent.startsWith(shown)) return Shown("", parsedContent.substring(shown.length))
         return when (state) {
-            State.START, State.TEXT -> pending.toString().trimEnd()
-            State.THINK, State.MARKUP -> ""
+            State.START, State.TEXT -> Shown("", pending.toString().trimEnd())
+            State.THINK, State.MARKUP -> NOTHING
         }
     }
 
@@ -141,5 +168,9 @@ internal class ReplyFilter(
             }
         }
         return at to found
+    }
+
+    private companion object {
+        val NOTHING = Shown("", "")
     }
 }

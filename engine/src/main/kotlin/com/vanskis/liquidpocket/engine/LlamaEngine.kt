@@ -11,6 +11,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -106,7 +107,25 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
         }
     }
 
+    override suspend fun countTokens(messages: List<ChatMessage>, params: GenerationParams): Int =
+        mutex.withLock {
+            withContext(dispatcher) {
+                if (loaded == null) throw EngineException("No model loaded")
+                val p = NativePrompt.of(messages, params.tools, placeholders = true)
+                try {
+                    LlamaNative.nativeCountPromptTokens(
+                        p.roles, p.contents, p.toolNames, p.toolCalls,
+                        p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools, params.think,
+                    )
+                } catch (e: IllegalStateException) {
+                    // A template or media error: the model itself is fine, so the state stays as it is.
+                    throw EngineException("Could not count tokens: ${e.message}", e)
+                }
+            }
+        }
+
     override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
+        val startNanos = System.nanoTime()
         mutex.withLock {
             val ready = loaded ?: throw EngineException("No model loaded")
             val last = messages.lastOrNull()?.role
@@ -121,6 +140,8 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
             var prefillNanos = 0L
             var prefillDone = false
             var generated = 0
+            var thinkingTokens = 0
+            var firstTokenMs: Long? = null
             var decodeNanos = 0L
             var failure: EngineException? = null
             try {
@@ -130,13 +151,13 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     native {
                         LlamaNative.nativeCountPromptTokens(
                             p.roles, p.contents, p.toolNames, p.toolCalls,
-                            p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                            p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools, params.think,
                         )
                     }
                 }.messages
                 val p = NativePrompt.of(trimmed, params.tools)
                 val markers = native {
-                    LlamaNative.nativeReplyMarkers(p.roles, p.contents, p.toolNames, p.toolCalls, p.tools)
+                    LlamaNative.nativeReplyMarkers(p.roles, p.contents, p.toolNames, p.toolCalls, p.tools, params.think)
                 }
                 val filter = ReplyFilter(
                     thinkStart = markers[0].firstOrNull()?.let(::utf8),
@@ -145,6 +166,7 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     toolStarts = markers[2].map(::utf8).ifEmpty {
                         if (params.tools.isEmpty()) emptyList() else LFM_TOOL_STARTS
                     },
+                    startInThink = markers.getOrNull(3)?.isNotEmpty() == true,
                 )
                 // Without speech output the reply is text only, as GenerationParams.speak allows.
                 val speaking = params.speak && _capabilities.value.audioOut
@@ -152,7 +174,7 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     LlamaNative.nativeBeginReply(
                         p.roles, p.contents, p.toolNames, p.toolCalls,
                         p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
-                        params.temperature, speaking,
+                        params.temperature, speaking, params.think,
                     )
                 }
                 promptTokens = counts[0]
@@ -186,8 +208,13 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                         continue
                     }
                     generated++
-                    val text = filter.append(utf8.append(bytes))
-                    if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
+                    val wasThinking = filter.thinking
+                    val shown = filter.append(utf8.append(bytes))
+                    if (wasThinking || filter.thinking) thinkingTokens++
+                    if (firstTokenMs == null && (shown.thinking.isNotEmpty() || shown.text.isNotEmpty())) {
+                        firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
+                    }
+                    emitShown(shown)
                 }
                 // After stop() the reply is cut short: no tool calls, and no held-back text or audio.
                 if (stopRequested) return@withLock
@@ -196,7 +223,10 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
 
                 val parsed = native { LlamaNative.nativeParseReply() }?.map(::utf8)
                 val rest = filter.complete(parsed?.first())
-                if (rest.isNotEmpty()) emit(ReplyChunk.Text(rest))
+                if (firstTokenMs == null && (rest.thinking.isNotEmpty() || rest.text.isNotEmpty())) {
+                    firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
+                }
+                emitShown(rest)
                 parsed?.drop(1)?.chunked(2)?.forEach { (name, args) ->
                     emit(ReplyChunk.ToolCall(ToolCall(name, args)))
                 }
@@ -214,12 +244,19 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                         prefillTokensPerSecond = perSecond(prefillTokens, prefillNanos),
                         generatedTokens = generated,
                         decodeTokensPerSecond = perSecond(generated, decodeNanos),
+                        thinkingTokens = thinkingTokens,
+                        timeToFirstTokenMs = firstTokenMs,
                     )
                 }
                 if (failure == null) _state.value = loaded ?: EngineState.Idle
             }
         }
     }.flowOn(dispatcher)
+
+    private suspend fun FlowCollector<ReplyChunk>.emitShown(shown: ReplyFilter.Shown) {
+        if (shown.thinking.isNotEmpty()) emit(ReplyChunk.Thinking(shown.thinking))
+        if (shown.text.isNotEmpty()) emit(ReplyChunk.Text(shown.text))
+    }
 
     override fun stop() {
         stopRequested = true
