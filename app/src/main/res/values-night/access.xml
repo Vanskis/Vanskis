@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ask_widget_surface">@android:color/system_neutral1_800</color>
+    <color name="ask_widget_on_surface">@android:color/system_neutral1_100</color>
+    <color name="ask_widget_accent">@android:color/system_accent1_200</color>
+    <color name="ask_widget_on_accent">@android:color/system_accent1_800</color>
+</resources>

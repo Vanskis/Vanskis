@@ -83,6 +83,20 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
         if (granted) vm.toggleMic() else vm.showError("Voice input needs the microphone. You can allow it in the app's settings.")
     }
 
+    val onMic = {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        // A tap while recording stops it; otherwise the permission is asked for on first use.
+        if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    // The widget's mic button opens a new chat listening (access/LaunchRequest.kt).
+    val launch by vm.launch.collectAsStateWithLifecycle()
+    LaunchedEffect(launch) {
+        val request = launch ?: return@LaunchedEffect
+        vm.launchHandled()
+        if (request.startVoice && recordingMillis == null) onMic()
+    }
+
     val status = modelStatus(engineState, state)
     val media = ChatMediaUi(
         pending = pending,
@@ -104,12 +118,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
                         vm.showError("No camera app is available.")
                     }
                 },
-                onMic = {
-                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                        PackageManager.PERMISSION_GRANTED
-                    // A tap while recording stops it; otherwise the permission is asked for on first use.
-                    if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
-                },
+                onMic = onMic,
                 recordingMillis = recordingMillis,
             )
         },
