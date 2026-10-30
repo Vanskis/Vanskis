@@ -17,6 +17,7 @@ import com.vanskis.liquidpocket.engine.ToolSpec
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +50,8 @@ class ModelSwapTest {
         var failLoadOf: String? = null
         /** When set, the next reply waits for it (or for [stop]) after its first text. */
         var hold: CompletableDeferred<Unit>? = null
+        /** When set, the next reply waits for it (or for [stop]) before its first text. */
+        var holdBeforeText: CompletableDeferred<Unit>? = null
         /** Per caption request ([PhotoCaptions.PROMPT]): the model loaded, the messages and the params. */
         val captions = mutableListOf<Triple<String, List<ChatMessage>, GenerationParams>>()
         /** What a caption request answers; empty gives no caption. */
@@ -75,6 +78,7 @@ class ModelSwapTest {
 
         override fun stop() {
             hold?.complete(Unit)
+            holdBeforeText?.complete(Unit)
             captionHold?.complete(Unit)
         }
 
@@ -97,6 +101,7 @@ class ModelSwapTest {
                 throw EngineException("The loaded model cannot hear audio")
             }
             val (text, calls) = replies.removeFirstOrNull() ?: ("Done" to emptyList())
+            holdBeforeText?.let { it.await(); holdBeforeText = null }
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             hold?.let { it.await(); hold = null }
             calls.forEach { emit(ReplyChunk.ToolCall(it)) }
@@ -284,6 +289,17 @@ class ModelSwapTest {
         assertEquals(listOf(TEXT.path, MEDIA.path, TEXT.path), engine.loads)
     }
 
+    @Test fun `ensureLoaded during an open routes for the conversation opened`() = runTest {
+        store.saved[7L] = mutableListOf(Turn(Role.USER, "What is this?", attachments = photo), Turn(Role.ASSISTANT, "A cat"))
+        val c = controller()
+        c.open(7L)
+        // Called before the open has run: it waits for the open, then routes the turns it opened.
+        launch(start = CoroutineStart.UNDISPATCHED) { c.ensureLoaded() }
+        advanceUntilIdle()
+
+        assertEquals(listOf(MEDIA.path), engine.loads)
+    }
+
     @Test fun `a new context size reloads the routed model`() = runTest {
         val c = controller()
         c.ensureLoaded()
@@ -453,6 +469,34 @@ class ModelSwapTest {
         val s = c.state.value
         assertNull(s.turns[0].caption)
         assertNull(store.saved.getValue(s.conversationId!!)[0].caption)
+    }
+
+    @Test fun `a turn sent while the last reply captions its photos stays generating until its own reply ends`() = runTest {
+        engine.captionText = "A tabby"
+        val caption = CompletableDeferred<Unit>()
+        engine.captionHold = caption
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        assertFalse("the caption does not keep the user waiting", c.state.value.busy)
+
+        val reply = CompletableDeferred<Unit>()
+        engine.holdBeforeText = reply
+        engine.replies += "Its name is Tom." to emptyList()
+        assertTrue(c.send("What is its name?", params))
+        caption.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue("the second reply is still under way", c.state.value.generating)
+        assertFalse("nothing else can be sent meanwhile", c.send("Hello?", params))
+        reply.complete(Unit)
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertFalse(s.busy)
+        assertEquals(listOf("What is this?", "Done", "What is its name?", "Its name is Tom."), s.turns.map { it.text })
+        assertEquals("A tabby", s.turns[0].caption)
+        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
     }
 
     private companion object {

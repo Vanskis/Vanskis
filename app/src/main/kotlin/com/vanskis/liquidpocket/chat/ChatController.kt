@@ -169,9 +169,11 @@ class ChatController(
      */
     suspend fun ensureLoaded() {
         if (_state.value.generating) return
+        job?.join()
+        // Routed after the wait: the operation waited for (an open, say) may have changed the turns.
+        if (_state.value.generating) return
         val target = route(_state.value.turns, textOnly = false) ?: return
         if (isLoaded(target)) return
-        job?.join()
         load(target)
     }
 
@@ -350,6 +352,7 @@ class ChatController(
         val dropped = before.turns.size > keep
         stopRequested = false
         lastParams = params
+        val id = ++newestReply
         _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, error = null) }
         after { previous ->
             previous?.join()
@@ -382,10 +385,14 @@ class ChatController(
                 if (!stopRequested) captionPhotos(conversationId)
                 refreshContextUsed(system, params)
             } finally {
-                _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
+                // A reply sent while this one captioned its photos owns the streaming state by now.
+                if (newestReply == id) _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
             }
         }
     }
+
+    /** Counts [reply] calls; each operation clears the streaming state only while its reply is the newest. */
+    private var newestReply = 0L
 
     /** The system prompt for a reply with [params]: the remembered facts, tool guidance and custom instructions. */
     private suspend fun systemMessage(params: GenerationParams): ChatMessage {
@@ -403,22 +410,29 @@ class ChatController(
     private suspend fun history(system: ChatMessage): List<ChatMessage> {
         val caps = engine.capabilities.value
         val turns = _state.value.turns
+        // Documents give the passages for the newest question, whichever turn attached them.
+        val question = turns.lastOrNull { it.role == Role.USER && !it.fromTool }?.text.orEmpty()
         return withContext(work) {
-            // Media is decoded once per turn, not again for the count after the reply.
+            // Media is decoded once per turn, not again for the count after the reply; documents are
+            // read again when the question changes.
             val previous = converted.takeIf { caps == convertedFor } ?: java.util.IdentityHashMap()
+            val sameQuestion = question == convertedQuestion
             val next = java.util.IdentityHashMap<Turn, ChatMessage>()
             val history = Compaction.history(system, turns) { turn ->
-                (previous[turn] ?: turn.toMessage(caps)).also { next[turn] = it }
+                val reused = previous[turn]?.takeIf { sameQuestion || turn.attachments.none { it.kind == AttachmentKind.DOCUMENT } }
+                (reused ?: turn.toMessage(caps, question)).also { next[turn] = it }
             }
             converted = next
             convertedFor = caps
+            convertedQuestion = question
             history
         }
     }
 
-    /** The messages [history] last made of each turn, with the capabilities they were made for. */
+    /** The messages [history] last made of each turn, with the capabilities and the question they were made for. */
     private var converted = java.util.IdentityHashMap<Turn, ChatMessage>()
     private var convertedFor: Capabilities? = null
+    private var convertedQuestion: String? = null
 
     /** Tokens the history takes as the engine counts it; the estimate from the newest reply's stats if it cannot. */
     private suspend fun contextUsed(system: ChatMessage, params: GenerationParams): Int =
@@ -724,9 +738,10 @@ class ChatController(
     /**
      * A user turn's attachments become decoded images and audio the model takes; media it cannot
      * take, or whose file is gone, becomes a note in the text so the engine is never given it. A
-     * document becomes the passages relevant to the turn's text ([DocumentContext]), in front of it.
+     * document becomes the passages relevant to the turn's text and the newest [question]
+     * ([DocumentContext]), in front of the turn's text.
      */
-    private fun Turn.toMessage(caps: Capabilities): ChatMessage {
+    private fun Turn.toMessage(caps: Capabilities, question: String): ChatMessage {
         // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
         // or as a note to a model that cannot see them (the text model). Thinking is never sent back.
         if (role != Role.USER || attachments.isEmpty()) {
@@ -743,6 +758,8 @@ class ChatController(
         val audio = mutableListOf<AudioInput>()
         val notes = mutableListOf<String>()
         val docs = mutableListOf<String>()
+        // A follow-up's words find its passages; this turn's own words keep what it asked about.
+        val query = if (question.isBlank() || question == text) text else "$text\n$question"
         for (attachment in attachments) {
             when (attachment.kind) {
                 AttachmentKind.IMAGE -> when {
@@ -755,7 +772,7 @@ class ChatController(
                         ?: run { notes += MediaNotes.AUDIO_MISSING }
                 }
                 AttachmentKind.DOCUMENT -> loadOrNull { documents.document(attachment.path) }
-                    ?.let { docs += DocumentContext.forQuestion(it, text) } ?: run { notes += MediaNotes.DOCUMENT_MISSING }
+                    ?.let { docs += DocumentContext.forQuestion(it, query) } ?: run { notes += MediaNotes.DOCUMENT_MISSING }
             }
         }
         val content = (docs + text + notes.distinct()).filter { it.isNotBlank() }.joinToString("\n\n")

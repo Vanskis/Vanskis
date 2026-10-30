@@ -643,6 +643,33 @@ class ChatControllerTest {
         assertEquals("How much did revenue grow?", c.state.value.turns[0].text)
     }
 
+    @Test fun `a follow-up gets the passages of an earlier document that it asks about`() = runTest {
+        val filler = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed eiusmod tempor incididunt labore. ".repeat(6)
+        val pages = List(30) { i ->
+            when (i) {
+                0 -> "Revenue grew 12% in Q3. "
+                29 -> "The warranty covers batteries for 24 months. "
+                else -> ""
+            } + filler
+        }
+        docs["d1"] = ExtractedDocument("long.pdf", DocumentFormat.PDF_MIME, pages)
+        val c = controller()
+        c.ready()
+        engine.reply("12%")
+        c.send("How much did revenue grow?", params, listOf(Attachment("d1", AttachmentKind.DOCUMENT, "long.pdf")))
+        advanceUntilIdle()
+        val first = engine.sent!!.last().content
+        assertTrue(first.contains("Revenue grew 12%"))
+        assertFalse("the first question does not need the last page", first.contains("24 months"))
+
+        exchange(c, "How long is the warranty?", "Two years")
+
+        val attaching = engine.sent!!.first { it.role == Role.USER }.content
+        assertTrue("the follow-up's passage is in the prompt", attaching.contains("The warranty covers batteries for 24 months."))
+        assertTrue("so is the first question's", attaching.contains("Revenue grew 12%"))
+        assertTrue(attaching.endsWith("How much did revenue grow?"))
+    }
+
     @Test fun `a message with only a document routes to the text model and is named after it`() = runTest {
         docs["d1"] = report
         val models = object : ModelTargets {
