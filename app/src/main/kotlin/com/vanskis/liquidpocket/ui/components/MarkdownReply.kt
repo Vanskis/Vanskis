@@ -1,6 +1,7 @@
 package com.vanskis.liquidpocket.ui.components
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -30,7 +32,24 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownAnimations
+import com.mikepenz.markdown.model.markdownAnnotator
+import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.rememberMarkdownState
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.getTextInNode
+
+/** Where formula <index> goes in the Markdown: an inline code span the annotator swaps for the formula. */
+private fun placeholder(index: Int) = "`\uE000$index\uE001`"
+private val PLACEHOLDER = Regex("\uE000(\\d+)\uE001")
+
+/** [text] with each formula swapped for its [placeholder]; a display formula gets a paragraph of its own. */
+private fun withPlaceholders(pieces: List<MathText.Piece>): String = buildString {
+    var i = 0
+    for (piece in pieces) when (piece) {
+        is MathText.Piece.Plain -> append(piece.text)
+        is MathText.Piece.Math -> if (piece.formula.display) append("\n\n").append(placeholder(i++)).append("\n\n") else append(placeholder(i++))
+    }
+}
 
 /**
  * A reply rendered as Markdown: headings, lists, emphasis, links, tables, inline code and code
@@ -39,10 +58,15 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * Safe while [text] is still streaming: the parser takes any prefix (an unclosed fence is a code
  * block that is still growing), parsing runs off the main thread, and retainState keeps the last
  * rendering on screen until the next one is ready, so the reply does not flash between tokens.
+ *
+ * LaTeX formulas ([MathText]) are drawn inline by [LocalMathRenderer]; one that does not parse
+ * shows as its source in monospace. A formula still streaming (unclosed) stays plain text.
  */
 @Composable
-fun MarkdownReply(text: String, onCopyCode: (String) -> Unit, modifier: Modifier = Modifier) {
-    val markdown = rememberMarkdownState(text, retainState = true)
+fun MarkdownReply(text: String, onCopyCode: (String) -> Unit, modifier: Modifier = Modifier) = BoxWithConstraints(modifier) {
+    val pieces = remember(text) { MathText.pieces(text) }
+    val math = remember(pieces) { pieces.filterIsInstance<MathText.Piece.Math>() }
+    val markdown = rememberMarkdownState(if (math.isEmpty()) text else withPlaceholders(pieces), retainState = true)
     val colors = MaterialTheme.colorScheme
     val type = MaterialTheme.typography
     val copy by rememberUpdatedState(onCopyCode)
@@ -60,9 +84,27 @@ fun MarkdownReply(text: String, onCopyCode: (String) -> Unit, modifier: Modifier
             },
         )
     }
+    val inline = mathInlineContent(
+        math.map { it.formula },
+        type.bodyLarge.fontSize,
+        colors.onSurface,
+        maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() },
+    )
+    val annotator = remember(math, inline.keys) {
+        markdownAnnotator { content, node ->
+            if (node.type != MarkdownElementTypes.CODE_SPAN) return@markdownAnnotator false
+            val code = node.getTextInNode(content).toString().trim('`')
+            val index = PLACEHOLDER.matchEntire(code)?.groupValues?.get(1)?.toIntOrNull() ?: return@markdownAnnotator false
+            val formula = math.getOrNull(index) ?: return@markdownAnnotator false
+            appendMath(index, formula.source, inline)
+            true
+        }
+    }
     Markdown(
         markdownState = markdown,
-        modifier = modifier,
+        modifier = Modifier.fillMaxWidth(),
+        annotator = annotator,
+        inlineContent = markdownInlineContent(inline),
         colors = markdownColor(
             text = colors.onSurface,
             codeBackground = colors.surfaceContainerHighest,

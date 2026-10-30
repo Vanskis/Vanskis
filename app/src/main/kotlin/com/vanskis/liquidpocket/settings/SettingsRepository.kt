@@ -33,7 +33,7 @@ data class AppSettings(
     val webSearch: Boolean = true,
     /** Free text added to the system prompt of every new chat; empty adds nothing. */
     val customInstructions: String = "",
-    /** Let the model reason before it answers (the composer's Think chip); Think harder always does. */
+    /** Let the model reason before it answers (the composer's Think chip). */
     val think: Boolean = true,
     /** Ask the engine for the NPU (experimental); it falls back to the CPU when it cannot use it. */
     val useNpu: Boolean = false,

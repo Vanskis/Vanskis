@@ -12,3 +12,8 @@
 # PdfBox-Android references the optional JPEG 2000 decoder (com.gemalto.jp2), which is not included.
 -dontwarn com.gemalto.jp2.JP2Decoder
 -dontwarn com.gemalto.jp2.JP2Encoder
+
+# JLaTeXMath loads its fonts and symbol tables by name from its own resources.
+-keep class org.scilab.forge.jlatexmath.** { *; }
+-keep class ru.noties.jlatexmath.** { *; }
+-dontwarn org.scilab.forge.jlatexmath.**

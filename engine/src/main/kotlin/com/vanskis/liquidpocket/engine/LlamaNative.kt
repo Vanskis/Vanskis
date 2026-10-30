@@ -111,6 +111,12 @@ internal object LlamaNative {
     external fun nativeNextToken(): ByteArray?
 
     /**
+     * Feeds UTF-8 [text] into a text reply as if the model had written it (closing a think block
+     * that ran past its budget). False, feeding nothing, when the context has no room for it.
+     */
+    external fun nativeForceText(text: ByteArray): Boolean
+
+    /**
      * The speech PCM (mono floats at `audioOutSampleRate`) generated since the last call, or null if
      * none. [flush] once the reply has ended: the speech decoder's held-back tail comes out too.
      */

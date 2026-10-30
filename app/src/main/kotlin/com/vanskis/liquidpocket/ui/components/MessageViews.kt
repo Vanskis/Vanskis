@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +24,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,13 +33,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.chat.Attachment
 import com.vanskis.liquidpocket.engine.GenerationStats
+import com.vanskis.liquidpocket.tools.Choices
 
 /** The user's message, right-aligned in a soft bubble under its [attachments]. [onEdit] and [onRetry] show only when given. */
 @Composable
@@ -57,9 +64,7 @@ fun UserMessage(
             contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.widthIn(max = 340.dp),
         ) {
-            SelectionContainer {
-                Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-            }
+            SelectionContainer { MathAwareText(text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
         }
         if (onEdit != null || onRetry != null) {
             Row {
@@ -70,12 +75,42 @@ fun UserMessage(
     }
 }
 
+/** The bubble's text, its LaTeX formulas drawn inline like a reply's ([MarkdownReply]). */
+@Composable
+private fun MathAwareText(text: String, modifier: Modifier = Modifier) {
+    val style = MaterialTheme.typography.bodyLarge
+    val pieces = remember(text) { MathText.pieces(text) }
+    val math = pieces.filterIsInstance<MathText.Piece.Math>()
+    if (math.isEmpty()) {
+        Text(text, style = style, modifier = modifier)
+        return
+    }
+    // The bubble is at most 340 dp wide, less its 16 dp padding each side.
+    val inline = mathInlineContent(
+        math.map { it.formula },
+        style.fontSize,
+        MaterialTheme.colorScheme.onSurface,
+        maxWidthPx = with(LocalDensity.current) { 308.dp.toPx() },
+    )
+    val annotated = buildAnnotatedString {
+        var i = 0
+        for (piece in pieces) when (piece) {
+            is MathText.Piece.Plain -> append(piece.text)
+            is MathText.Piece.Math -> appendMath(i++, piece.source, inline)
+        }
+    }
+    Text(annotated, style = style, inlineContent = inline, modifier = modifier)
+}
+
 /**
  * The model's reply: the sparkle mark, then full-width Markdown with no bubble, like Gemini. Above
  * it, the model's [thinking] when it gives one (see [ThinkingSection]). While [streaming] with no
  * text yet it shows the typing indicator. Copy shows once the reply is complete; [onRegenerate] and
- * [onThinkHarder] only when given, [stats] ("23 tok/s · 0.4 s to first token") when given.
- * [onCopy] copies the whole reply, [onCopyCode] one code block.
+ * [onContinue] (a reply cut off by the context or a Stop) only when given, [stats] ("23 tok/s · 0.4 s
+ * to first token") when given. [onCopy] copies the whole reply, [onCopyCode] one code block.
+ *
+ * [offer] (offer_choices) shows its options as chips under the reply: a tap runs [onChoose], and
+ * "Type my own…" runs [onTypeOwn]. With [onChoose] null (answered, or a reply running) they are greyed out.
  */
 @Composable
 fun AssistantMessage(
@@ -86,8 +121,10 @@ fun AssistantMessage(
     modifier: Modifier = Modifier,
     onCopyCode: (String) -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
-    onThinkHarder: (() -> Unit)? = null,
-    thinkHarderEnabled: Boolean = true,
+    onContinue: (() -> Unit)? = null,
+    offer: Choices.Offer? = null,
+    onChoose: ((String) -> Unit)? = null,
+    onTypeOwn: () -> Unit = {},
     thinking: String? = null,
     thinkingSeconds: Int? = null,
 ) {
@@ -98,23 +135,44 @@ fun AssistantMessage(
             ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty())
             if (text.isEmpty() && streaming) {
                 if (thinking == null) TypingIndicator(modifier = Modifier.padding(vertical = 8.dp))
-            } else {
+            } else if (text.isNotEmpty()) {
                 SelectionContainer {
                     MarkdownReply(text, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth())
                 }
             }
+            offer?.let { ChoiceChips(it, showQuestion = it.question !in text, onChoose = onChoose, onTypeOwn = onTypeOwn) }
             if (!streaming) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                    MessageAction(AppIcons.ContentCopy, "Copy", onCopy)
+                    if (text.isNotEmpty()) MessageAction(AppIcons.ContentCopy, "Copy", onCopy)
                     onRegenerate?.let { MessageAction(Icons.Filled.Refresh, "Regenerate", it) }
-                    onThinkHarder?.let {
-                        TextButton(onClick = it, enabled = thinkHarderEnabled, modifier = Modifier.height(36.dp)) {
-                            Text("Think harder", style = MaterialTheme.typography.labelLarge)
+                    onContinue?.let {
+                        TextButton(onClick = it, modifier = Modifier.height(36.dp)) {
+                            Text("Continue", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
                 stats?.let { StatsLine(it, modifier = Modifier.padding(start = 10.dp)) }
             }
+        }
+    }
+}
+
+/** The offer's [Choices.Offer.question] (unless the reply already says it), then a chip per option and "Type my own…". */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChoiceChips(offer: Choices.Offer, showQuestion: Boolean, onChoose: ((String) -> Unit)?, onTypeOwn: () -> Unit) {
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        if (showQuestion) Text(offer.question, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 4.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            offer.options.forEach { option ->
+                AssistChip(onClick = { onChoose?.invoke(option) }, enabled = onChoose != null, label = { Text(option) })
+            }
+            AssistChip(
+                onClick = onTypeOwn,
+                enabled = onChoose != null,
+                label = { Text("Type my own…") },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp)) },
+            )
         }
     }
 }

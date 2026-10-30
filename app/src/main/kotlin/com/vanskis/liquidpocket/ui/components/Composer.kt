@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -121,64 +122,63 @@ fun Composer(
                         onCancelExtraction = onCancelExtraction,
                     )
                 }
-                Row(verticalAlignment = Alignment.Bottom) {
+                // Two rows: the field gets the full width, the buttons go under it.
+                TextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth().then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
+                    placeholder = { Text("Ask Liquid Pocket") },
+                    minLines = 1,
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp, end = 4.dp)) {
                     if (onPickPhoto != null || onTakePhoto != null || onPickDocument != null) {
                         AttachMenuButton(
                             enabled = attachEnabled && recordingMillis == null,
                             onPickPhoto = onPickPhoto,
                             onTakePhoto = onTakePhoto,
-                            modifier = Modifier.padding(bottom = 4.dp),
                             onPickDocument = onPickDocument,
                         )
                     }
-                    TextField(
-                        value = value,
-                        onValueChange = onValueChange,
-                        modifier = Modifier.weight(1f).then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
-                        placeholder = { Text("Ask Liquid Pocket") },
-                        minLines = 1,
-                        maxLines = 6,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent,
-                        ),
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp)) {
-                        onToggleThink?.let { ThinkChip(think, it) }
-                        onMic?.let { MicButton(enabled = attachEnabled, onMic = it, recordingMillis = recordingMillis) }
-                        if (contextTotal > 0) {
-                            ContextRing(
-                                used = contextUsed,
-                                total = contextTotal,
-                                onCompact = { onCompact?.invoke() },
-                                compactEnabled = onCompact != null && !generating,
+                    onToggleThink?.let { ThinkChip(think, it) }
+                    Spacer(modifier = Modifier.weight(1f))
+                    onMic?.let { MicButton(enabled = attachEnabled, onMic = it, recordingMillis = recordingMillis) }
+                    if (contextTotal > 0) {
+                        ContextRing(
+                            used = contextUsed,
+                            total = contextTotal,
+                            onCompact = { onCompact?.invoke() },
+                            compactEnabled = onCompact != null && !generating,
+                        )
+                    }
+                    if (generating) {
+                        RoundAction(
+                            onClick = onStop,
+                            enabled = true,
+                            filled = SolidColor(colors.inverseSurface),
+                            contentColor = colors.inverseOnSurface,
+                        ) { Icon(AppIcons.Stop, contentDescription = "Stop the reply", modifier = Modifier.size(20.dp)) }
+                    } else {
+                        RoundAction(
+                            onClick = onSend,
+                            enabled = canSend,
+                            filled = if (canSend) Accent.brush else SolidColor(colors.onSurface.copy(alpha = 0.10f)),
+                            contentColor = if (canSend) Color.White else colors.onSurface.copy(alpha = 0.38f),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = if (editing) "Send the edited message" else "Send",
+                                modifier = Modifier.size(20.dp),
                             )
-                        }
-                        if (generating) {
-                            RoundAction(
-                                onClick = onStop,
-                                enabled = true,
-                                filled = SolidColor(colors.inverseSurface),
-                                contentColor = colors.inverseOnSurface,
-                            ) { Icon(AppIcons.Stop, contentDescription = "Stop the reply", modifier = Modifier.size(20.dp)) }
-                        } else {
-                            RoundAction(
-                                onClick = onSend,
-                                enabled = canSend,
-                                filled = if (canSend) Accent.brush else SolidColor(colors.onSurface.copy(alpha = 0.10f)),
-                                contentColor = if (canSend) Color.White else colors.onSurface.copy(alpha = 0.38f),
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = if (editing) "Send the edited message" else "Send",
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
                         }
                     }
                 }

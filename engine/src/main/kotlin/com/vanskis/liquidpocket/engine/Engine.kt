@@ -91,7 +91,13 @@ data class BenchResult(
 
 data class GenerationParams(
     val temperature: Float = 0.3f,
+    /**
+     * Most tokens the reply may run to; [UNTIL_CONTEXT_FULL] lets it run until the context is full.
+     * Trimming the conversation leaves room for at most [REPLY_ROOM] of them.
+     */
     val maxNewTokens: Int = 1024,
+    /** Most tokens the model may think for; then the think block is closed and the answer begins. */
+    val thinkBudget: Int = 2048,
     /** Tools offered to the model; rendered into the prompt by the model's chat template. */
     val tools: List<ToolSpec> = emptyList(),
     /** Ask the model to answer in speech as well as text (needs [Capabilities.audioOut]). */
@@ -101,7 +107,12 @@ data class GenerationParams(
      * reasoning streams as [ReplyChunk.Thinking]. Ignored by models without thinking.
      */
     val think: Boolean = true,
-)
+) {
+    companion object {
+        const val UNTIL_CONTEXT_FULL = Int.MAX_VALUE
+        const val REPLY_ROOM = 1024
+    }
+}
 
 data class Capabilities(
     val vision: Boolean,
@@ -169,6 +180,8 @@ data class GenerationStats(
     val thinkingTokens: Int = 0,
     /** Milliseconds from the start of the reply to its first [ReplyChunk.Text] or [ReplyChunk.Thinking]; null if none came. */
     val timeToFirstTokenMs: Long? = null,
+    /** The reply stopped because it hit [GenerationParams.maxNewTokens] or the context filled, not at its end. */
+    val cutOff: Boolean = false,
 )
 
 sealed interface EngineState {

@@ -84,6 +84,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.core)
     implementation(libs.markdown.renderer.m3)
+    implementation(libs.jlatexmath.android)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)

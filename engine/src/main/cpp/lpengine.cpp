@@ -1200,6 +1200,33 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeNextToken(JNIEnv * env, j
     return to_jbytes(env, piece);
 }
 
+// Feeds jtext into the reply as if the model had written it (it closes a thinking section that ran
+// past its budget). Returns false, feeding nothing, when the context has no room for it.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeForceText(JNIEnv * env, jobject /*thiz*/, jbyteArray jtext) {
+    if (g_ctx == nullptr || g_sampler == nullptr || g_speak) { throw_java(env, "No text reply in progress"); return JNI_FALSE; }
+    const auto toks = common_tokenize(g_vocab, jbytes_to_std(env, jtext), false, true);
+    if (g_n_tokens + toks.size() + 1 >= static_cast<size_t>(g_n_ctx)) return JNI_FALSE;
+    for (const llama_token token : toks) {
+        common_sampler_accept(g_sampler, token, true);
+        g_batch.clear();
+        g_batch.add(token, g_n_past, 0, true);
+        const int32_t rc = llama_process(g_ctx, LLAMA_PROCESS_TYPE_DECODE, g_batch.get());
+        if (rc != 0) {
+            reset_cache();
+            throw_java(env, "Token decoding failed (llama_process returned " + std::to_string(rc) + ")");
+            return JNI_FALSE;
+        }
+        unit u;
+        u.token = token;
+        cache_push(u);
+        const std::string piece = common_token_to_piece(g_ctx, token, true);
+        g_generated.append(piece, token);
+        if (g_cached_text_valid) g_cached_text += piece;
+    }
+    return JNI_TRUE;
+}
+
 // The speech PCM (mono, at the audioOutSampleRate of nativeCapabilities) generated since the last
 // call, or null if none. jflush: the reply has ended, so the codec's held-back tail goes out too.
 extern "C" JNIEXPORT jfloatArray JNICALL

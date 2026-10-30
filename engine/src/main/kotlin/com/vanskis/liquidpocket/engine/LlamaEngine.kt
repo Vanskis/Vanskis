@@ -232,11 +232,12 @@ internal class LlamaEngine(
             var prefillDone = false
             var generated = 0
             var thinkingTokens = 0
+            var cutOff = false
             var firstTokenMs: Long? = null
             var decodeNanos = 0L
             var failure: EngineException? = null
             try {
-                val budget = ContextBudget.of(ready.contextSize, params.maxNewTokens)
+                val budget = ContextBudget.of(ready.contextSize, minOf(params.maxNewTokens, GenerationParams.REPLY_ROOM))
                 val trimmed = ConversationTrimmer.trim(messages, budget) { msgs ->
                     val p = NativePrompt.of(msgs, params.tools, placeholders = true)
                     native {
@@ -284,7 +285,11 @@ internal class LlamaEngine(
                 val utf8 = Utf8Accumulator()
                 // Audio frames come about two per text token; the cap ends a reply whose speech never stops.
                 var audioSteps = 0
-                val maxAudioSteps = params.maxNewTokens * 4
+                val maxAudioSteps = (params.maxNewTokens.toLong() * 4).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                // Past its budget the think block is closed for the model, once, so the answer gets the rest.
+                val thinkEnd = markers[1].firstOrNull()?.let { String(it, Charsets.UTF_8) }
+                var thinkClosed = false
+                var ended = false
                 while (generated < params.maxNewTokens && audioSteps <= maxAudioSteps && !stopRequested) {
                     currentCoroutineContext().ensureActive()
                     val t0 = System.nanoTime()
@@ -292,7 +297,10 @@ internal class LlamaEngine(
                     decodeNanos += System.nanoTime() - t0
                     // A spoken reply's audio comes with the step that made it, the last one too.
                     if (speaking) native { LlamaNative.nativeTakeAudio(flush = false) }?.let { emit(ReplyChunk.Audio(it)) }
-                    if (bytes == null) break
+                    if (bytes == null) {
+                        ended = true
+                        break
+                    }
                     // Steps that only made audio return no text and do not count as generated tokens.
                     if (speaking && bytes.isEmpty()) {
                         audioSteps++
@@ -306,7 +314,16 @@ internal class LlamaEngine(
                         firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
                     }
                     emitShown(shown)
+                    if (filter.thinking && thinkingTokens >= params.thinkBudget && !thinkClosed && !speaking && thinkEnd != null) {
+                        thinkClosed = true
+                        val close = "\n$thinkEnd\n\n"
+                        if (native { LlamaNative.nativeForceText(close.toByteArray()) }) {
+                            emitShown(filter.append(utf8.append(close.toByteArray())))
+                        }
+                    }
                 }
+                // The native side also ends the reply when the context is full: that is a cut too.
+                cutOff = !ended || promptTokens + generated + CONTEXT_FULL_SLACK >= ready.contextSize
                 // After stop() the reply is cut short: no tool calls, and no held-back text or audio.
                 if (stopRequested) return@withLock
                 // Prefill and decoding ran to the end on the loaded accelerator: the NPU, if that, works.
@@ -338,6 +355,7 @@ internal class LlamaEngine(
                         generatedTokens = generated,
                         decodeTokensPerSecond = perSecond(generated, decodeNanos),
                         thinkingTokens = thinkingTokens,
+                        cutOff = cutOff,
                         timeToFirstTokenMs = firstTokenMs,
                     )
                 }
@@ -383,6 +401,8 @@ internal class LlamaEngine(
 
     private companion object {
         const val TAG = "LlamaEngine"
+        /** A reply that ends this close to the context size ran out of room rather than finishing. */
+        const val CONTEXT_FULL_SLACK = 8
 
         /** The NPU backend's file name (OUTPUT_NAME in CMakeLists.txt, NPU_LIB in lpengine.cpp). */
         const val NPU_LIB = "liblp-hexagon.so"

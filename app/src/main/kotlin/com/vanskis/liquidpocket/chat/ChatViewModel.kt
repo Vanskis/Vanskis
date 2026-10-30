@@ -156,6 +156,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         val s = settings.value
         return GenerationParams(
             temperature = s.temperature,
+            // A reply runs until it ends or the context is full; a cut one can be continued.
+            maxNewTokens = GenerationParams.UNTIL_CONTEXT_FULL,
             tools = tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
             speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine),
         )
@@ -197,11 +199,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     override fun regenerate() {
         silence()
         controller.regenerate(params())
-    }
-
-    override fun thinkHarder() {
-        silence()
-        controller.thinkHarder(params())
     }
 
     override fun editAndResend(text: String) {

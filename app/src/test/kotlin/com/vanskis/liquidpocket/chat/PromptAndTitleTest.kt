@@ -58,7 +58,7 @@ class PromptAndTitleTest {
     }
 
     @Test fun `every preset fits the custom instructions limit`() {
-        assertEquals(listOf("Concise", "Explain like I'm 12", "Friendly", "Formal", "Code helper"), InstructionPresets.ALL.map { it.first })
+        assertEquals(listOf("Concise", "Explain like I'm 12", "Friendly", "Formal", "Code helper", "Interactive story"), InstructionPresets.ALL.map { it.first })
         assertTrue(InstructionPresets.ALL.all { it.second.isNotBlank() && it.second.length <= SystemPrompt.MAX_CUSTOM_CHARS })
     }
 

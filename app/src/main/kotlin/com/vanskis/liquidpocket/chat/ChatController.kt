@@ -15,6 +15,7 @@ import com.vanskis.liquidpocket.engine.ImageInput
 import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
+import com.vanskis.liquidpocket.tools.Choices
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
@@ -145,7 +146,7 @@ class ChatController(
      */
     private var loadedFor: Triple<String, Int, Accelerator>? = null
 
-    /** Lets a model that thinks reason before answering ([GenerationParams.think]); [thinkHarder] always does. */
+    /** Lets a model that thinks reason before answering ([GenerationParams.think]). */
     var think: Boolean = true
 
     /** The newest reply's params, which [open] and [compact] count the context with (tools take room in it). */
@@ -234,17 +235,6 @@ class ChatController(
         reply(keep = last + 1, newUser = null, params = withThink(params))
     }
 
-    /**
-     * Replaces the reply to the newest user turn with one from the text model (even after a photo or
-     * voice turn), always thinking, whatever [think] says, with twice the [GenerationParams.maxNewTokens].
-     */
-    fun thinkHarder(params: GenerationParams) {
-        val now = _state.value
-        if (!canRegenerate(now)) return
-        val harder = params.copy(think = true, maxNewTokens = params.maxNewTokens * 2)
-        reply(keep = now.lastUserIndex + 1, newUser = null, params = harder, textOnly = true)
-    }
-
     /** Replaces the newest user turn with [text], drops what followed it, and streams a new reply. */
     fun editAndResend(text: String, params: GenerationParams) {
         val prompt = text.trim()
@@ -329,8 +319,6 @@ class ChatController(
 
     private fun withThink(params: GenerationParams) = params.copy(think = think)
 
-    private fun canRegenerate(state: ChatState) = state.lastUserIndex >= 0 && !busy(state)
-
     private fun requestStop() {
         stopRequested = true
         engine.stop()
@@ -341,11 +329,11 @@ class ChatController(
      * Keeps the first [keep] turns, appends [newUser] if given, and streams the assistant's reply to
      * the result, running the tools it calls. The store is brought to the same turns before the engine starts.
      *
-     * The model the turns route to ([route], as if nothing was attached when [textOnly]) is loaded
+     * The model the turns route to ([route]) is loaded
      * first if it is not already; when none is installed the loaded model answers. With [newUser],
      * the conversation is compacted first if it fills the context ([compactIfFull]).
      */
-    private fun reply(keep: Int, newUser: Turn?, params: GenerationParams, textOnly: Boolean = false) {
+    private fun reply(keep: Int, newUser: Turn?, params: GenerationParams) {
         val before = _state.value
         val kept = before.turns.take(keep)
         val turns = if (newUser == null) kept else kept + newUser
@@ -368,7 +356,7 @@ class ChatController(
                 _state.update { it.copy(conversationId = conversationId) }
                 if (stopRequested) return@after
                 val system = systemMessage(params)
-                val target = route(turns, textOnly)
+                val target = route(turns, textOnly = false)
                 if (target != null && (!load(target) || stopRequested)) return@after
                 if (newUser != null) {
                     compactIfFull(system, params, conversationId)
@@ -380,7 +368,8 @@ class ChatController(
                     if (calls.isEmpty()) break
                     rounds++
                     runTools(calls, conversationId)
-                    if (stopRequested) break
+                    // Offered choices end the turn: the user's pick is the next message.
+                    if (stopRequested || Choices.offerIn(calls) != null) break
                 }
                 if (!stopRequested) captionPhotos(conversationId)
                 refreshContextUsed(system, params)
@@ -611,7 +600,10 @@ class ChatController(
             )
         }
         // The reply has ended once no tools are left to run; a tool round's text is not its end.
-        if (text.isNotEmpty() && toRun.isEmpty()) sink.finished(text, completed = failure == null && !stopRequested, spoke = spoke)
+        // Offered choices end it too; a voice reply reads them out.
+        val offer = Choices.offerIn(toRun)
+        val ended = if (offer != null) offer.spoken(text) else text.takeIf { toRun.isEmpty() }
+        if (!ended.isNullOrEmpty()) sink.finished(ended, completed = failure == null && !stopRequested, spoke = spoke)
         if (replyTurn != null) save(conversationId, replyTurn)
         return toRun
     }

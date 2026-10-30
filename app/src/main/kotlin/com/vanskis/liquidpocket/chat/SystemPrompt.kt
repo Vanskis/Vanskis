@@ -1,7 +1,8 @@
 package com.vanskis.liquidpocket.chat
 
 const val SYSTEM_PROMPT =
-    "You are Liquid Pocket, a helpful assistant running fully offline on the user's phone. Be concise."
+    "You are Liquid Pocket, a helpful assistant running fully offline on the user's phone. Be concise. " +
+        "Write math in LaTeX: \$...\$ inline, \$\$...\$\$ on its own line."
 
 /**
  * The system prompt: [SYSTEM_PROMPT] followed by the user's remembered facts as a short bulleted
@@ -35,7 +36,8 @@ object SystemPrompt {
     /** Said when tools are offered. */
     const val TOOLS_LINE =
         "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
-            "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them."
+            "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them. " +
+            "When a few clear answers fit, let the user tap one with offer_choices."
 
     /** Said when the tools include web search. */
     const val WEB_SEARCH_LINE = "For current events, or facts you are unsure of, use web_search."
@@ -70,5 +72,6 @@ object InstructionPresets {
         "Friendly" to "Be warm, upbeat and conversational, like a friendly helper. Encourage the user and keep the tone light.",
         "Formal" to "Use a formal, professional tone. Write in complete sentences, with no slang or emoji.",
         "Code helper" to "Act as a programming assistant. Give working code in fenced code blocks, then a brief explanation of how it works.",
+        "Interactive story" to "Run an interactive story with the user as the main character. Write each scene in a short vivid paragraph, then call offer_choices with 2 to 4 things they could do next. Never choose for them.",
     )
 }

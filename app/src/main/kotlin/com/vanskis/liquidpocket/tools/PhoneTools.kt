@@ -21,6 +21,7 @@ fun phoneTools(app: LiquidPocketApp, gate: PermissionGate, webSearch: () -> Bool
     AlarmTool(app),
     RememberTool(app.chats),
     WebSearchTool(appVersion(app), webSearch),
+    OfferChoicesTool(),
     FetchPageTool(webSearch),
 )
 

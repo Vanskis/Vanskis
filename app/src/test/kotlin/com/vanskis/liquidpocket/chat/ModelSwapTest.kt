@@ -355,27 +355,6 @@ class ModelSwapTest {
         assertFalse(s.busy)
     }
 
-    @Test fun `think harder regenerates on the text model, thinking, with twice the tokens`() = runTest {
-        val c = controller()
-        c.think = false
-        c.send("What is this?", params.copy(maxNewTokens = 512), photo)
-        advanceUntilIdle()
-        assertFalse("the setting reaches the engine", engine.chats.single().second.think)
-
-        engine.replies += "A tabby cat, about two years old." to emptyList()
-        c.thinkHarder(params.copy(maxNewTokens = 512))
-        advanceUntilIdle()
-
-        val (model, sentParams) = engine.chats.last()
-        assertEquals(TEXT.path, model)
-        assertTrue(sentParams.think)
-        assertEquals(1024, sentParams.maxNewTokens)
-        val s = c.state.value
-        assertEquals(listOf("What is this?", "A tabby cat, about two years old."), s.turns.map { it.text })
-        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
-        assertFalse(s.busy)
-    }
-
     @Test fun `the media model captions the photos it answered about, saved on the turn and never streamed or spoken`() = runTest {
         engine.captionText = "A tabby cat asleep on a red sofa."
         val c = controller()

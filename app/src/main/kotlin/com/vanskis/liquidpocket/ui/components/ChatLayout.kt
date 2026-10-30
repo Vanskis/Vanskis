@@ -63,19 +63,20 @@ import com.vanskis.liquidpocket.chat.ChatState
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ModelStatus
 import com.vanskis.liquidpocket.engine.Role
+import com.vanskis.liquidpocket.tools.Choices
 import kotlinx.coroutines.launch
 
 /** Scrolled up more than this (px) into the newest message, the scroll-down button shows. */
 private const val SCROLL_BUTTON_OFFSET = 200
+
+/** What Continue under a cut-off reply sends. */
+private const val CONTINUE = "Continue from where you stopped."
 
 /** What the chat screen can ask for; the view model implements it. */
 interface ChatActions {
     fun send(text: String)
     fun stop()
     fun regenerate()
-
-    /** Redoes the newest reply on the text model, always thinking (whatever the Think chip says), with a larger budget. */
-    fun thinkHarder()
     fun editAndResend(text: String)
     fun newChat()
     fun openConversation(id: Long)
@@ -256,7 +257,8 @@ fun ChatLayout(
                     contentPadding = padding,
                     onCopy = onCopy,
                     onRegenerate = actions::regenerate,
-                    onThinkHarder = actions::thinkHarder,
+                    onSend = actions::send,
+                    onTypeOwn = { media.focusRequester?.requestFocus() },
                     onEdit = { text ->
                         input = text
                         editing = true
@@ -282,7 +284,9 @@ private fun MessageList(
     contentPadding: PaddingValues,
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
-    onThinkHarder: () -> Unit,
+    /** Sends a message: a tapped choice, or Continue under a cut-off reply. */
+    onSend: (String) -> Unit,
+    onTypeOwn: () -> Unit,
     onEdit: (String) -> Unit,
     onApproveTool: (confirmationId: Long) -> Unit,
     onDeclineTool: (confirmationId: Long) -> Unit,
@@ -322,7 +326,9 @@ private fun MessageList(
                     turn != null && turn.summary -> SummaryDivider(turn.text)
                     turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
                     // A reply that only called tools: its tool turns that follow show what happened.
-                    turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() -> Unit
+                    // (One that offered choices still shows them.)
+                    turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() &&
+                        Choices.offerIn(turn.toolCalls) == null -> Unit
                     turn == null && confirmation != null -> ToolConfirmationCard(confirmation, onApproveTool, onDeclineTool)
                     user != null -> {
                         val newest = idle && index == state.lastUserIndex
@@ -334,11 +340,14 @@ private fun MessageList(
                             onRetry = if (newest && isLast) onRegenerate else null,
                         )
                     }
+                    // The chips under the reply already show an offer.
+                    tool != null && tool.toolName == Choices.TOOL -> Unit
                     tool != null -> ToolMessage(tool.toolName, tool.text)
                     // One call site for the streaming and the saved reply, so its Markdown state carries over.
                     else -> {
                         val text = turn?.text ?: state.streaming.orEmpty()
                         val newest = idle && isLast && state.lastUserIndex >= 0
+                        val offer = turn?.let { Choices.offerIn(it.toolCalls) }
                         AssistantMessage(
                             text = text,
                             streaming = turn == null,
@@ -346,7 +355,11 @@ private fun MessageList(
                             onCopyCode = onCopy,
                             onCopy = { onCopy(text) },
                             onRegenerate = if (newest) onRegenerate else null,
-                            onThinkHarder = if (newest) onThinkHarder else null,
+                            onContinue = if (newest && turn?.stats?.cutOff == true) ({ onSend(CONTINUE) }) else null,
+                            offer = offer,
+                            // Only the newest offer takes a tap: once the user has said anything after it, it is answered.
+                            onChoose = if (offer != null && idle && index > state.lastUserIndex) onSend else null,
+                            onTypeOwn = onTypeOwn,
                             thinking = if (turn == null) state.streamingThinking else turn.thinking,
                             thinkingSeconds = turn?.thinkingMillis?.let { (it / 1000).toInt() },
                         )

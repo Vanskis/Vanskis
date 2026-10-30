@@ -13,6 +13,7 @@ junit = "4.13.2"
 room = "2.8.5"
 ksp = "2.3.12"
 markdown = "0.39.2"
+jlatexmath-android = "0.2.0"
 pdfbox-android = "2.0.27.0"
 mlkit-text-recognition = "16.0.1"
 
@@ -39,6 +40,7 @@ androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 markdown-renderer-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdown" }
+jlatexmath-android = { module = "ru.noties:jlatexmath-android", version.ref = "jlatexmath-android" }
 pdfbox-android = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfbox-android" }
 mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlkit-text-recognition" }
 junit = { module = "junit:junit", version.ref = "junit" }

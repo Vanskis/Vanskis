@@ -50,6 +50,7 @@ import com.vanskis.liquidpocket.media.AndroidMediaLoader
 import com.vanskis.liquidpocket.ui.components.ChatLayout
 import com.vanskis.liquidpocket.ui.components.ChatMediaUi
 import com.vanskis.liquidpocket.ui.components.LocalImageThumbnail
+import com.vanskis.liquidpocket.ui.components.LocalMathRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -185,7 +186,8 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val thumbnail = remember(placeholder) {
         @Composable { path: String, modifier: Modifier -> ImageThumbnail(path, modifier, placeholder) }
     }
-    CompositionLocalProvider(LocalImageThumbnail provides thumbnail) {
+    val math = remember { JLatexMathRenderer(context) }
+    CompositionLocalProvider(LocalImageThumbnail provides thumbnail, LocalMathRenderer provides math) {
         ChatLayout(
             state = state,
             status = status,

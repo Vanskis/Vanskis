@@ -12,6 +12,8 @@ import com.vanskis.liquidpocket.engine.ReplyChunk
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 import com.vanskis.liquidpocket.engine.ToolSpec
+import com.vanskis.liquidpocket.tools.Choices
+import com.vanskis.liquidpocket.tools.OfferChoicesTool
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
@@ -265,5 +267,38 @@ class ToolLoopTest {
         assertEquals(1, engine.sent.size)
         assertEquals(listOf(Role.USER, Role.ASSISTANT), c.state.value.turns.map { it.role })
         assertEquals(emptyList<ToolCall>(), c.state.value.turns[1].toolCalls)
+    }
+
+    @Test fun `offered choices end the turn and a voice reply reads them out`() = runTest {
+        val choices = OfferChoicesTool()
+        val offer = call(Choices.TOOL, """{"question":"Which door?","options":["Left","Right"]}""")
+        engine.replies += "Two doors stand before you." to listOf(offer)
+        val heard = mutableListOf<String>()
+        val sink = object : ReplySink {
+            override fun finished(text: String, completed: Boolean, spoke: Boolean) {
+                heard += text
+            }
+        }
+        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(choices), sink = sink)
+        c.send("start", GenerationParams(tools = listOf(choices.spec)))
+        advanceUntilIdle()
+
+        assertEquals("no round after the offer", 1, engine.sent.size)
+        val s = c.state.value
+        assertFalse(s.busy)
+        assertEquals(listOf(Role.USER, Role.ASSISTANT, Role.TOOL), s.turns.map { it.role })
+        assertEquals(listOf(offer), s.turns[1].toolCalls)
+        assertEquals(listOf("Two doors stand before you.\n\nWhich door? 1: Left. 2: Right."), heard)
+    }
+
+    @Test fun `an offer without two options is an error the model can fix`() = runTest {
+        val choices = OfferChoicesTool()
+        engine.replies += "" to listOf(call(Choices.TOOL, """{"question":"Which?","options":["Only"]}"""))
+        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(choices))
+        c.send("start", GenerationParams(tools = listOf(choices.spec)))
+        advanceUntilIdle()
+
+        assertEquals("the error goes back for another round", 2, engine.sent.size)
+        assertTrue(engine.sent[1].last().content.contains("error"))
     }
 }
