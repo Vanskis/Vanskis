@@ -117,6 +117,7 @@ private fun MathAwareText(text: String, modifier: Modifier = Modifier) {
  *
  * [offer] (offer_choices) shows its options as chips under the reply: a tap runs [onChoose], and
  * "Type my own…" runs [onTypeOwn]. With [onChoose] null (answered, or a reply running) they are greyed out.
+ * [model] names the model that wrote the reply, beside its actions.
  */
 @Composable
 fun AssistantMessage(
@@ -135,6 +136,7 @@ fun AssistantMessage(
     thinkingSeconds: Int? = null,
     thinkingTokens: Int? = null,
     liveTokens: Int = 0,
+    model: String? = null,
 ) {
     Row(modifier = modifier.fillMaxWidth()) {
         AssistantMark(busy = streaming, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
@@ -158,6 +160,14 @@ fun AssistantMessage(
                         TextButton(onClick = it, modifier = Modifier.height(36.dp)) {
                             Text("Continue", style = MaterialTheme.typography.labelLarge)
                         }
+                    }
+                    model?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
                     }
                 }
                 stats?.let { StatsLine(it, modifier = Modifier.padding(start = 10.dp)) }

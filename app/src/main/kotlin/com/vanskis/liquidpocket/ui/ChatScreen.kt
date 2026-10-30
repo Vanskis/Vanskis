@@ -71,7 +71,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val indicators by vm.indicators.collectAsStateWithLifecycle()
     val recordingMillis by vm.recordingMillis.collectAsStateWithLifecycle()
     val transcript by vm.transcript.collectAsStateWithLifecycle()
-    val think by vm.think.collectAsStateWithLifecycle()
+    val modelMenu by vm.modelMenu.collectAsStateWithLifecycle()
     val live by vm.live.collectAsStateWithLifecycle()
     val extracting by vm.extracting.collectAsStateWithLifecycle()
     val shared by SharedInbox.pendingDocuments.collectAsStateWithLifecycle()
@@ -241,8 +241,9 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             },
             onOpenSettings = onOpenSettings,
             media = media,
-            think = think,
-            onToggleThink = vm::toggleThink,
+            modelMenu = modelMenu,
+            onThinking = vm::setThinking,
+            onPickModel = vm::pickModel,
             skills = skills,
             contextTotal = contextTotal,
             onCompact = vm::compact,

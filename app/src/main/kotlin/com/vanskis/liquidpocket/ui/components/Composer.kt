@@ -16,11 +16,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -40,8 +37,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.access.SharedDocument
@@ -57,8 +52,8 @@ import com.vanskis.liquidpocket.chat.Skills
  * are disabled unless [attachEnabled] (the mic's stop stays live while it records). The
  * [ContextRing] shows once [contextTotal] is known; its Compact now runs [onCompact], disabled when
  * that is null. [pending] attachments show above the field, each with a remove button, then the
- * documents still [extracting]; [shared] documents show as chips above the pill. The Think chip
- * (selected when [think]) shows when [onToggleThink] is given. [focusRequester] is attached to the field.
+ * documents still [extracting]; [shared] documents show as chips above the pill. The model menu
+ * ([ModelMenuChip]) shows when [modelMenu] is given. [focusRequester] is attached to the field.
  * Typing "/" lists the [skills] matching what follows it; picking one calls [onPickSkill] and clears
  * the field. The chat's [skill] shows as a chip above the pill, which [onDropSkill] removes.
  */
@@ -89,8 +84,9 @@ fun Composer(
     contextUsed: Int = 0,
     contextTotal: Int = 0,
     onCompact: (() -> Unit)? = null,
-    think: Boolean = false,
-    onToggleThink: (() -> Unit)? = null,
+    modelMenu: ModelMenuState? = null,
+    onThinking: (think: Boolean, budget: Int) -> Unit = { _, _ -> },
+    onPickModel: (String) -> Unit = {},
     skills: List<Skill> = emptyList(),
     skill: Skill? = null,
     onPickSkill: ((Skill) -> Unit)? = null,
@@ -166,7 +162,7 @@ fun Composer(
                             onPickDocument = onPickDocument,
                         )
                     }
-                    onToggleThink?.let { ThinkChip(think, it) }
+                    modelMenu?.let { ModelMenuChip(it, onThinking, onPickModel) }
                     Spacer(modifier = Modifier.weight(1f))
                     onMic?.let { MicButton(enabled = attachEnabled, onMic = it, recordingMillis = recordingMillis) }
                     if (contextTotal > 0) {
@@ -208,38 +204,6 @@ fun Composer(
  * "Think": whether replies reason before answering. On is filled in the accent color with a check;
  * off is an outline in muted text, so the two cannot be mistaken in any theme.
  */
-@Composable
-private fun ThinkChip(think: Boolean, onToggle: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    FilterChip(
-        selected = think,
-        onClick = onToggle,
-        label = { Text(if (think) "Think on" else "Think") },
-        leadingIcon = {
-            Icon(
-                if (think) Icons.Filled.Check else AppIcons.Lightbulb,
-                contentDescription = null,
-                modifier = Modifier.size(FilterChipDefaults.IconSize),
-            )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = Color.Transparent,
-            labelColor = colors.onSurfaceVariant.copy(alpha = 0.8f),
-            iconColor = colors.onSurfaceVariant.copy(alpha = 0.8f),
-            selectedContainerColor = colors.primary,
-            selectedLabelColor = colors.onPrimary,
-            selectedLeadingIconColor = colors.onPrimary,
-        ),
-        border = FilterChipDefaults.filterChipBorder(
-            enabled = true,
-            selected = think,
-            borderColor = colors.outline,
-            selectedBorderColor = Color.Transparent,
-        ),
-        modifier = Modifier.padding(end = 4.dp).semantics { stateDescription = if (think) "On" else "Off" },
-    )
-}
-
 /** A 40 dp round button filled with [filled] (a gradient or a solid color). */
 @Composable
 private fun RoundAction(

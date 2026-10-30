@@ -16,6 +16,7 @@ import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.access.LaunchRequest
 import com.vanskis.liquidpocket.access.SharedDocument
 import com.vanskis.liquidpocket.access.SharedInbox
+import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.docs.DocumentText
 import com.vanskis.liquidpocket.docs.ExtractedDocument
@@ -36,6 +37,7 @@ import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
 import com.vanskis.liquidpocket.ui.components.DocumentExtraction
 import com.vanskis.liquidpocket.ui.components.Indicators
+import com.vanskis.liquidpocket.ui.components.ModelMenuState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -100,11 +102,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     val permissions = PermissionGate(app)
     private val tools = phoneTools(graph, permissions) { settings.value.webSearch }
     /**
-     * LFM3-1.7B answers; Omni takes its place for photo and voice turns, when installed. Each is the
-     * Heretic build when chosen in Settings and downloaded, else the standard one.
+     * The model picked in the composer's menu answers, else LFM3-1.7B; Omni takes its place for photo
+     * and voice turns, when installed. Each is the Heretic build when chosen in Settings and
+     * downloaded, else the standard one.
      */
     private val models = object : ModelTargets {
-        override suspend fun text() = installed(settings.value.textModel) ?: installed(ACTIVE_MODEL)
+        override suspend fun text() =
+            picked(settings.value)?.let { installed(it) } ?: installed(settings.value.textModel) ?: installed(ACTIVE_MODEL)
         override suspend fun media() = installed(settings.value.mediaModel) ?: installed(MEDIA_MODEL)
     }
 
@@ -131,8 +135,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     val think: StateFlow<Boolean> =
         settings.map { it.think }.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings().think)
 
+    private val _modelMenu = MutableStateFlow(ModelMenuState(AppSettings().think, AppSettings().thinkBudget, emptyList(), null))
+
+    /** The composer's menu: the thinking level and the installed models, refreshed on each settings change. */
+    val modelMenu: StateFlow<ModelMenuState> = _modelMenu.asStateFlow()
+
     init {
         viewModelScope.launch { think.collect { controller.think = it } }
+        viewModelScope.launch { settings.collect { refreshModels() } }
+    }
+
+    /** Every model the chat can answer with: each catalogued one and, once its repo is set, its Heretic build. */
+    private fun candidates(s: AppSettings): List<ModelSpec> =
+        listOf(ACTIVE_MODEL to s.hereticTextRepo, MEDIA_MODEL to s.hereticMediaRepo).flatMap { (base, repo) ->
+            listOfNotNull(base, Heretic.spec(base, repo).takeIf { Heretic.isRepo(repo) })
+        }
+
+    /** The model picked in the composer's menu, while it is still offered. */
+    private fun picked(s: AppSettings): ModelSpec? = candidates(s).firstOrNull { it.id == s.chatModel }
+
+    private suspend fun refreshModels() {
+        val s = settings.value
+        val ready = withContext(Dispatchers.IO) { candidates(s).filter { graph.installer.installedFile(it) != null } }
+        // The one models.text() loads.
+        val selected = listOfNotNull(picked(s), s.textModel, ACTIVE_MODEL).firstOrNull { it in ready }
+        _modelMenu.value = ModelMenuState(s.think, s.thinkBudget, ready.map { ModelChoice(it.id, it.displayName, it.thinks) }, selected?.id)
     }
 
     val speakReplies: StateFlow<Boolean> =
@@ -179,6 +206,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                 controller.showError("${ACTIVE_MODEL.displayName} is not downloaded. Open Settings → Manage model.")
                 return@launch
             }
+            refreshModels()
             controller.ensureLoaded()
         }
     }
@@ -186,7 +214,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private suspend fun installed(spec: ModelSpec): LoadTarget? {
         val (file, mmproj) = withContext(Dispatchers.IO) { graph.installer.installedFile(spec) to graph.installer.installedMmproj(spec) }
         file ?: return null
-        return LoadTarget(file.path, mmproj?.path, graph.settings.settings.first().contextSize)
+        return LoadTarget(file.path, mmproj?.path, graph.settings.settings.first().contextSize, spec.displayName)
     }
 
     /** Silences the previous reply, so a new one (or the user) is not talked over. */
@@ -256,9 +284,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Reports a problem the screen ran into (a denied permission, no camera app). */
     fun showError(message: String) = controller.showError(message)
 
-    fun toggleThink() {
-        val on = !settings.value.think
-        viewModelScope.launch { graph.settings.setThink(on) }
+    /** The composer menu's thinking level. */
+    fun setThinking(on: Boolean, budget: Int) {
+        viewModelScope.launch { graph.settings.setThinking(on, budget) }
+    }
+
+    /** Answers with [id] from now on: the chat stays, and the model is loaded in place of the current one. */
+    fun pickModel(id: String) {
+        viewModelScope.launch {
+            graph.settings.setChatModel(id)
+            settings.first { it.chatModel == id }
+            controller.ensureLoaded()
+        }
     }
 
     fun toggleSpeakReplies() {

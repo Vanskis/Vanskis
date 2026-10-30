@@ -114,9 +114,10 @@ fun ChatLayout(
     onShare: (title: String, markdown: String) -> Unit,
     onOpenSettings: () -> Unit,
     media: ChatMediaUi = ChatMediaUi(),
-    /** Whether replies reason first: the composer's Think chip, shown when [onToggleThink] is given. */
-    think: Boolean = true,
-    onToggleThink: (() -> Unit)? = null,
+    /** The composer's model and thinking menu ([ModelMenuChip]); hidden when null. */
+    modelMenu: ModelMenuState? = null,
+    onThinking: (think: Boolean, budget: Int) -> Unit = { _, _ -> },
+    onPickModel: (String) -> Unit = {},
     /** The loaded model's context window in tokens; 0 hides the composer's context ring. */
     contextTotal: Int = 0,
     /** Summarizes older turns to free context (the ring's Compact now); disabled when null. */
@@ -240,8 +241,9 @@ fun ChatLayout(
                     focusRequester = media.focusRequester,
                     onMic = media.onMic,
                     recordingMillis = media.recordingMillis,
-                    think = think,
-                    onToggleThink = onToggleThink,
+                    modelMenu = modelMenu,
+                    onThinking = onThinking,
+                    onPickModel = onPickModel,
                     contextUsed = state.contextUsed,
                     contextTotal = contextTotal,
                     // Enabled only with more than a few turns since the newest summary, and nothing running.
@@ -384,6 +386,7 @@ private fun MessageList(
                             thinkingSeconds = turn?.thinkingMillis?.let { (it / 1000).toInt() },
                             thinkingTokens = if (turn == null) state.streamingThinkingTokens else turn.thinkingTokens,
                             liveTokens = if (turn == null) state.streamingTokens else 0,
+                            model = turn?.model,
                         )
                     }
                 }

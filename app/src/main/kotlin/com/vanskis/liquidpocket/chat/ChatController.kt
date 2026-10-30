@@ -156,6 +156,9 @@ class ChatController(
      */
     private var loadedFor: Triple<String, Int, Accelerator>? = null
 
+    /** The loaded model's display name ([LoadTarget.name]), saved with each reply ([Turn.model]). */
+    private var loadedName: String? = null
+
     /** Lets a model that thinks reason before answering ([GenerationParams.think]). */
     var think: Boolean = true
 
@@ -203,11 +206,13 @@ class ChatController(
         try {
             withContext(work) { engine.load(target.path, EngineConfig(target.contextSize, target.mmprojPath, accelerator)) }
             loadedFor = Triple(target.path, target.contextSize, accelerator)
+            loadedName = target.name.ifEmpty { null }
             true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             loadedFor = null
+            loadedName = null
             _state.update { it.copy(error = "Could not load the model: ${e.message ?: e.javaClass.simpleName}") }
             false
         } finally {
@@ -633,6 +638,7 @@ class ChatController(
                 Role.ASSISTANT, text, stats, toolCalls = toRun,
                 thinking = thinking, thinkingMillis = thinkingMillis.takeIf { thinking != null },
                 thinkingTokens = thinkingTokens.takeIf { thinking != null && it > 0 },
+                model = loadedName,
             )
         }
         _state.update {

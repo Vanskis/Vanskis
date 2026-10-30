@@ -1,7 +1,16 @@
 package com.vanskis.liquidpocket.chat
 
 /** A model file to load, with its multimodal projector (if any) and the context size to load it with. */
-data class LoadTarget(val path: String, val mmprojPath: String?, val contextSize: Int)
+data class LoadTarget(
+    val path: String,
+    val mmprojPath: String?,
+    val contextSize: Int,
+    /** The model's display name, saved with each reply it writes ([Turn.model]); empty for none. */
+    val name: String = "",
+)
+
+/** A model the composer's menu offers to answer with: its [ModelSpec] id and display name. */
+data class ModelChoice(val id: String, val name: String, val thinks: Boolean)
 
 /**
  * The models [ChatController] routes replies to; only one is in memory at a time. Null means the

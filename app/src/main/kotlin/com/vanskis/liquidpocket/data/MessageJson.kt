@@ -45,7 +45,7 @@ object MessageJson {
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
     /**
-     * `{"thinking": "...", "thinkingMillis": 1234, "thinkingTokens": 340, "summary": true, "caption": "...", "context": "..."}`, a key left out when null (or
+     * `{"thinking": "...", "thinkingMillis": 1234, "thinkingTokens": 340, "summary": true, "caption": "...", "context": "...", "model": "..."}`, a key left out when null (or
      * false, for `summary`). No extras is stored as null.
      */
     fun encodeExtras(extras: MessageExtras): String? =
@@ -57,6 +57,7 @@ object MessageJson {
             extras.thinkingTokens?.let { put("thinkingTokens", it) }
             extras.context?.let { put("context", it) }
             extras.skill?.let { put("skill", Skills.encodeOne(it)) }
+            extras.model?.let { put("model", it) }
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -72,6 +73,7 @@ object MessageJson {
                 thinkingTokens = obj["thinkingTokens"]?.jsonPrimitive?.intOrNull,
                 context = obj["context"]?.jsonPrimitive?.takeIf { it.isString }?.content,
                 skill = Skills.decodeOne(obj["skill"] as? JsonObject),
+                model = obj["model"]?.jsonPrimitive?.takeIf { it.isString }?.content,
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -97,8 +99,9 @@ data class MessageExtras(
     val thinkingTokens: Int? = null,
     val context: String? = null,
     val skill: Skill? = null,
+    val model: String? = null,
 ) {
     val isEmpty: Boolean get() =
         thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty() && thinkingTokens == null &&
-            context.isNullOrEmpty() && skill == null
+            context.isNullOrEmpty() && skill == null && model.isNullOrEmpty()
 }

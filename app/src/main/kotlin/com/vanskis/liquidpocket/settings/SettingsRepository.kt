@@ -46,6 +46,8 @@ data class AppSettings(
     val think: Boolean = true,
     /** Tokens a reply may think before its answer is forced ([ThinkBudget]). */
     val thinkBudget: Int = ThinkBudget.DEFAULT,
+    /** The model id picked in the composer's menu; empty (or no longer offered) for the default text model. */
+    val chatModel: String = "",
     /** Ask the engine for the NPU (experimental); it falls back to the CPU when it cannot use it. */
     val useNpu: Boolean = false,
     /** Who live voice talks to; null until chosen, which means Omni when installed ([LiveVoiceModel.resolve]). */
@@ -93,6 +95,7 @@ class SettingsRepository(context: Context) {
                 ),
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
                 think = prefs[THINK] ?: true,
+                chatModel = prefs[CHAT_MODEL] ?: "",
                 thinkBudget = prefs[THINK_BUDGET]?.let(ThinkBudget::clamp) ?: ThinkBudget.DEFAULT,
                 useNpu = prefs[USE_NPU] ?: false,
                 liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
@@ -128,6 +131,7 @@ class SettingsRepository(context: Context) {
             it[SHOW_ELAPSED] = value.indicators.elapsed
             it[CUSTOM_INSTRUCTIONS] = value.customInstructions.take(SystemPrompt.MAX_CUSTOM_CHARS)
             it[THINK] = value.think
+            it[CHAT_MODEL] = value.chatModel
             it[THINK_BUDGET] = ThinkBudget.clamp(value.thinkBudget)
             it[USE_NPU] = value.useNpu
             value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
@@ -157,6 +161,18 @@ class SettingsRepository(context: Context) {
 
     suspend fun setThink(value: Boolean) {
         store.edit { it[THINK] = value }
+    }
+
+    /** The composer menu's thinking level: whether to think and, when it does, how much. */
+    suspend fun setThinking(on: Boolean, budget: Int) {
+        store.edit {
+            it[THINK] = on
+            it[THINK_BUDGET] = ThinkBudget.clamp(budget)
+        }
+    }
+
+    suspend fun setChatModel(id: String) {
+        store.edit { it[CHAT_MODEL] = id }
     }
 
     suspend fun setThinkBudget(value: Int) {
@@ -200,6 +216,7 @@ class SettingsRepository(context: Context) {
         val HERETIC_MEDIA = booleanPreferencesKey("heretic_media")
         val HERETIC_MEDIA_REPO = stringPreferencesKey("heretic_media_repo")
         val THINK = booleanPreferencesKey("think")
+        val CHAT_MODEL = stringPreferencesKey("chat_model")
         val THINK_BUDGET = intPreferencesKey("think_budget")
         val USE_NPU = booleanPreferencesKey("use_npu")
         val NPU_BENCHMARKED = booleanPreferencesKey("npu_benchmarked")

@@ -175,6 +175,7 @@ class ModelSwapTest {
         assertEquals(TEXT.path, engine.chats.single().first)
         val s = c.state.value
         assertEquals(listOf("What is 17 * 23?", "Done"), s.turns.map { it.text })
+        assertEquals("the reply names the model that wrote it", listOf(null, "LFM3-1.7B"), s.turns.map { it.model })
         assertNull(s.error)
         assertFalse(s.busy)
     }
@@ -191,6 +192,7 @@ class ModelSwapTest {
         assertEquals(MEDIA.path, engine.chats.single().first)
         assertTrue("the media model sees the photo", engine.sent.single().last().images.isNotEmpty())
         assertNull(c.state.value.error)
+        assertEquals("LFM3-Omni-2B", c.state.value.turns.last().model)
     }
 
     @Test fun `a voice turn goes to the media model, which hears the clip and may speak`() = runTest {
@@ -479,8 +481,8 @@ class ModelSwapTest {
     }
 
     private companion object {
-        val TEXT = LoadTarget("/lfm3-1.7b.gguf", null, 8192)
-        val MEDIA = LoadTarget("/lfm3-omni-2b.gguf", "/lfm3-omni-2b-mmproj.gguf", 8192)
+        val TEXT = LoadTarget("/lfm3-1.7b.gguf", null, 8192, name = "LFM3-1.7B")
+        val MEDIA = LoadTarget("/lfm3-omni-2b.gguf", "/lfm3-omni-2b-mmproj.gguf", 8192, name = "LFM3-Omni-2B")
         val OMNI = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
     }
 }

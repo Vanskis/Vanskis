@@ -54,7 +54,7 @@ class MessageJsonTest {
         val captioned = MessageExtras(caption = "A tabby cat on a \"red\" sofa.")
         assertTrue(!captioned.isEmpty)
         assertEquals(captioned, MessageJson.decodeExtras(MessageJson.encodeExtras(captioned)))
-        val all = MessageExtras("hm", 12L, summary = false, caption = "A cat.", thinkingTokens = 340)
+        val all = MessageExtras("hm", 12L, summary = false, caption = "A cat.", thinkingTokens = 340, model = "LFM3-1.7B Heretic")
         assertEquals(all, MessageJson.decodeExtras(MessageJson.encodeExtras(all)))
         assertEquals(MessageExtras(), MessageJson.decodeExtras("""{"caption": 3}"""))
     }

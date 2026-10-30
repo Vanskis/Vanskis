@@ -17,6 +17,8 @@ data class ModelSpec(
     val mmprojQuants: List<String>? = null,
     /** Tried in order when no model file matches [quant]. */
     val fallbackQuants: List<String> = emptyList(),
+    /** Whether it can reason before answering; the composer's menu offers thinking levels only then. */
+    val thinks: Boolean = true,
 )
 
 object ModelCatalog {
@@ -39,6 +41,7 @@ object ModelCatalog {
         approxSizeBytes = 1_300_000_000L,
         offered = true,
         mmprojQuants = listOf("Q8_0", "F16", "BF16"),
+        thinks = false,
     )
 
     val all: List<ModelSpec> = listOf(LFM3_1_7B, LFM3_OMNI_2B)

@@ -96,7 +96,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setUserSkills(value: List<Skill>) = edit { it.copy(userSkills = value) }
 
     fun setHeretic(media: Boolean, use: Boolean, repo: String) = edit {
-        if (media) it.copy(hereticMedia = use, hereticMediaRepo = repo) else it.copy(hereticText = use, hereticTextRepo = repo)
+        // A text model choice in Settings replaces the one picked in the composer's menu.
+        if (media) it.copy(hereticMedia = use, hereticMediaRepo = repo) else it.copy(hereticText = use, hereticTextRepo = repo, chatModel = "")
     }
 
     fun downloadStatus(spec: ModelSpec): Flow<DownloadStatus> = graph.downloads.status(spec)
