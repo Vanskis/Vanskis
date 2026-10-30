@@ -60,6 +60,8 @@ data class ChatState(
     val contextUsed: Int = 0,
     /** Compact now is summarizing older turns. */
     val compacting: Boolean = false,
+    /** The skill picked for this chat ("/" in the composer); its instructions are in every reply's system prompt. */
+    val skill: Skill? = null,
 ) {
     val generating: Boolean get() = streaming != null
 
@@ -228,7 +230,7 @@ class ChatController(
         val prompt = text.trim()
         val now = _state.value
         if ((prompt.isEmpty() && attachments.isEmpty()) || busy(now)) return false
-        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments, context = environment()), params = withThink(params))
+        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments, context = environment(), skill = now.skill), params = withThink(params))
         return true
     }
 
@@ -246,7 +248,7 @@ class ChatController(
         val now = _state.value
         val last = now.lastUserIndex
         if (prompt.isEmpty() || last < 0 || busy(now)) return
-        val edited = now.turns[last].copy(text = prompt, context = environment())
+        val edited = now.turns[last].copy(text = prompt, context = environment(), skill = now.skill)
         reply(keep = last, newUser = edited, params = withThink(params))
     }
 
@@ -293,14 +295,18 @@ class ChatController(
     /** Starts a new, unsaved conversation. */
     fun newChat() = after { previous ->
         stopAndWait(previous)
-        _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0) }
+        _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0, skill = null) }
     }
+
+    /** Uses [skill] for this chat from the next reply on; null drops it. */
+    fun setSkill(skill: Skill?) = _state.update { it.copy(skill = skill) }
 
     /** Opens a saved conversation with all its turns, and counts the context they take. */
     fun open(conversationId: Long) = after { previous ->
         stopAndWait(previous)
         val turns = persist { store.turns(conversationId) } ?: return@after
-        _state.update { it.copy(conversationId = conversationId, turns = turns, error = null, contextUsed = 0) }
+        val skill = turns.lastOrNull { it.role == Role.USER && !it.fromTool }?.skill
+        _state.update { it.copy(conversationId = conversationId, turns = turns, error = null, contextUsed = 0, skill = skill) }
         refreshContextUsed(systemMessage(lastParams), lastParams)
     }
 
@@ -406,6 +412,7 @@ class ChatController(
             tools = params.tools.isNotEmpty(),
             custom = customInstructions(),
             webSearch = params.tools.any { it.name == WebTools.SEARCH },
+            skill = _state.value.skill,
         )
         return ChatMessage(Role.SYSTEM, prompt)
     }

@@ -2,6 +2,8 @@ package com.vanskis.liquidpocket.data
 
 import com.vanskis.liquidpocket.chat.Attachment
 import com.vanskis.liquidpocket.chat.AttachmentKind
+import com.vanskis.liquidpocket.chat.Skill
+import com.vanskis.liquidpocket.chat.Skills
 import com.vanskis.liquidpocket.engine.ToolCall
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -54,6 +56,7 @@ object MessageJson {
             extras.caption?.let { put("caption", it) }
             extras.thinkingTokens?.let { put("thinkingTokens", it) }
             extras.context?.let { put("context", it) }
+            extras.skill?.let { put("skill", Skills.encodeOne(it)) }
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -68,6 +71,7 @@ object MessageJson {
                 caption = obj["caption"]?.jsonPrimitive?.takeIf { it.isString }?.content,
                 thinkingTokens = obj["thinkingTokens"]?.jsonPrimitive?.intOrNull,
                 context = obj["context"]?.jsonPrimitive?.takeIf { it.isString }?.content,
+                skill = Skills.decodeOne(obj["skill"] as? JsonObject),
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -92,8 +96,9 @@ data class MessageExtras(
     val caption: String? = null,
     val thinkingTokens: Int? = null,
     val context: String? = null,
+    val skill: Skill? = null,
 ) {
     val isEmpty: Boolean get() =
         thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty() && thinkingTokens == null &&
-            context.isNullOrEmpty()
+            context.isNullOrEmpty() && skill == null
 }

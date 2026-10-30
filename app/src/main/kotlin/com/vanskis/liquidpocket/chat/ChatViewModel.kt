@@ -240,6 +240,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     override fun declineTool(confirmationId: Long) = controller.declineTool(confirmationId)
 
+    override fun setSkill(skill: Skill?) = controller.setSkill(skill)
+
+    /** What "/" lists: the built-in skills, then the user's own from Settings. */
+    val skills: StateFlow<List<Skill>> =
+        settings.map { Skills.BUILT_IN + it.userSkills }.stateIn(viewModelScope, SharingStarted.Eagerly, Skills.BUILT_IN)
+
     /** Reports a problem the screen ran into (a denied permission, no camera app). */
     fun showError(message: String) = controller.showError(message)
 

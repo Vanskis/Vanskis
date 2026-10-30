@@ -44,6 +44,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.InstructionPresets
+import com.vanskis.liquidpocket.ui.components.SkillEditor
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
@@ -212,6 +213,10 @@ fun SettingsScreen(
                 minLines = 3,
                 supportingText = { Text("${instructions.length} / ${SystemPrompt.MAX_CUSTOM_CHARS}") },
             )
+
+            Text("Skills", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            Text("Type / in a chat to pick one. Add your own here; they are listed after the built-in ones.", style = MaterialTheme.typography.bodySmall)
+            SkillEditor(settings.userSkills, vm::setUserSkills, modifier = Modifier.padding(top = 8.dp))
 
             Text("Voice", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

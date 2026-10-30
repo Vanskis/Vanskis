@@ -11,6 +11,8 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
+import com.vanskis.liquidpocket.chat.Skill
+import com.vanskis.liquidpocket.chat.Skills
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
@@ -41,6 +43,8 @@ data class AppSettings(
     val useNpu: Boolean = false,
     /** Who live voice talks to; null until chosen, which means Omni when installed ([LiveVoiceModel.resolve]). */
     val liveVoiceModel: LiveVoiceModel? = null,
+    /** The user's own skills, listed after the built-in ones when "/" is typed. */
+    val userSkills: List<Skill> = emptyList(),
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -68,6 +72,7 @@ class SettingsRepository(context: Context) {
                 thinkBudget = prefs[THINK_BUDGET]?.let(ThinkBudget::clamp) ?: ThinkBudget.DEFAULT,
                 useNpu = prefs[USE_NPU] ?: false,
                 liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
+                userSkills = Skills.decode(prefs[USER_SKILLS]),
             )
         }
         .distinctUntilChanged()
@@ -94,6 +99,7 @@ class SettingsRepository(context: Context) {
             it[THINK_BUDGET] = ThinkBudget.clamp(value.thinkBudget)
             it[USE_NPU] = value.useNpu
             value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
+            it[USER_SKILLS] = Skills.encode(value.userSkills)
         }
     }
 
@@ -139,6 +145,7 @@ class SettingsRepository(context: Context) {
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
         val WEB_SEARCH = booleanPreferencesKey("web_search")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
+        val USER_SKILLS = stringPreferencesKey("user_skills")
         val THINK = booleanPreferencesKey("think")
         val THINK_BUDGET = intPreferencesKey("think_budget")
         val USE_NPU = booleanPreferencesKey("use_npu")

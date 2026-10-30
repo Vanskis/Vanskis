@@ -274,6 +274,28 @@ class ToolLoopTest {
         assertEquals("[first]", store.saved.getValue(c.state.value.conversationId!!)[0].context)
     }
 
+    @Test fun `a chat's skill is in every reply's system prompt and comes back when the chat is reopened`() = runTest {
+        val skill = Skills.BUILT_IN.first { it.id == "jokes" }
+        val c = controller()
+        c.setSkill(skill)
+        c.send("one about cats", params)
+        advanceUntilIdle()
+        assertTrue(engine.sent[0][0].content.contains(skill.instructions))
+        val id = c.state.value.conversationId!!
+
+        c.newChat()
+        advanceUntilIdle()
+        assertNull(c.state.value.skill)
+        c.open(id)
+        advanceUntilIdle()
+        assertEquals(skill, c.state.value.skill)
+
+        c.setSkill(null)
+        c.send("plain now", params)
+        advanceUntilIdle()
+        assertFalse(engine.sent.last()[0].content.contains(skill.instructions))
+    }
+
     @Test fun `a tool loaded with tool_search is offered in full from then on`() = runTest {
         engine.replies += "" to listOf(call(ToolCatalog.SEARCH, """{"names":["create_note"]}"""))
         engine.replies += "Loaded." to emptyList()

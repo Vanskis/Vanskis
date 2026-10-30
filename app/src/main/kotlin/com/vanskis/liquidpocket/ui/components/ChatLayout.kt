@@ -62,6 +62,8 @@ import com.vanskis.liquidpocket.chat.ChatSearchHit
 import com.vanskis.liquidpocket.chat.ChatState
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ModelStatus
+import com.vanskis.liquidpocket.chat.Skill
+import com.vanskis.liquidpocket.chat.Skills
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.tools.Choices
 import kotlinx.coroutines.launch
@@ -93,6 +95,9 @@ interface ChatActions {
     /** Answers the tool call waiting in [ChatState.confirmation], if [confirmationId] is the shown card's. */
     fun approveTool(confirmationId: Long)
     fun declineTool(confirmationId: Long)
+
+    /** Uses [skill] for the open chat; null drops it. */
+    fun setSkill(skill: Skill?) {}
 }
 
 /** The chat screen: the conversation drawer around the top bar, the messages and the composer. */
@@ -116,6 +121,8 @@ fun ChatLayout(
     contextTotal: Int = 0,
     /** Summarizes older turns to free context (the ring's Compact now); disabled when null. */
     onCompact: (() -> Unit)? = null,
+    /** What "/" in the composer lists: the built-in skills and the user's own. */
+    skills: List<Skill> = Skills.BUILT_IN,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -239,6 +246,10 @@ fun ChatLayout(
                     contextTotal = contextTotal,
                     // Enabled only with more than a few turns since the newest summary, and nothing running.
                     onCompact = onCompact?.takeIf { state.canCompact },
+                    skills = skills,
+                    skill = state.skill,
+                    onPickSkill = actions::setSkill,
+                    onDropSkill = { actions.setSkill(null) },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },

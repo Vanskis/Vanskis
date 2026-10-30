@@ -61,6 +61,7 @@ private const val THUMBNAIL_SIDE = 400
 fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val engineState by vm.engineState.collectAsStateWithLifecycle()
+    val skills by vm.skills.collectAsStateWithLifecycle()
     val conversations by vm.conversations.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
     val speakReplies by vm.speakReplies.collectAsStateWithLifecycle()
@@ -211,6 +212,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             media = media,
             think = think,
             onToggleThink = vm::toggleThink,
+            skills = skills,
             contextTotal = contextTotal,
             onCompact = vm::compact,
         )

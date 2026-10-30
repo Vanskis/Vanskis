@@ -43,6 +43,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.access.SharedDocument
 import com.vanskis.liquidpocket.chat.Attachment
+import com.vanskis.liquidpocket.chat.Skill
+import com.vanskis.liquidpocket.chat.Skills
 
 /**
  * The message pill at the bottom, like Gemini's: + (photo and document menu), the field, mic, the
@@ -54,6 +56,8 @@ import com.vanskis.liquidpocket.chat.Attachment
  * that is null. [pending] attachments show above the field, each with a remove button, then the
  * documents still [extracting]; [shared] documents show as chips above the pill. The Think chip
  * (selected when [think]) shows when [onToggleThink] is given. [focusRequester] is attached to the field.
+ * Typing "/" lists the [skills] matching what follows it; picking one calls [onPickSkill] and clears
+ * the field. The chat's [skill] shows as a chip above the pill, which [onDropSkill] removes.
  */
 @Composable
 fun Composer(
@@ -84,8 +88,14 @@ fun Composer(
     onCompact: (() -> Unit)? = null,
     think: Boolean = false,
     onToggleThink: (() -> Unit)? = null,
+    skills: List<Skill> = emptyList(),
+    skill: Skill? = null,
+    onPickSkill: ((Skill) -> Unit)? = null,
+    onDropSkill: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
+    val command = if (editing || onPickSkill == null) null else Skills.command(value)
+    val suggestions = command?.let { Skills.matching(skills, it) }.orEmpty()
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -95,6 +105,10 @@ fun Composer(
             .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp),
     ) {
         if (shared.isNotEmpty()) SharedDocumentChips(shared, onUseShared, modifier = Modifier.padding(bottom = 4.dp))
+        if (suggestions.isNotEmpty() && onPickSkill != null) {
+            SkillSuggestions(suggestions, onPick = { onPickSkill(it); onValueChange("") }, modifier = Modifier.padding(bottom = 6.dp))
+        }
+        if (skill != null) SkillChip(skill, onDropSkill, modifier = Modifier.padding(start = 8.dp, bottom = 2.dp))
         Surface(shape = RoundedCornerShape(28.dp), color = colors.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
                 if (editing) {

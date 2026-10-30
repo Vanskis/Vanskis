@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
+import com.vanskis.liquidpocket.chat.Skill
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
@@ -89,6 +90,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setCustomInstructions(value: String) = edit { it.copy(customInstructions = value.take(SystemPrompt.MAX_CUSTOM_CHARS)) }
 
     fun setUseNpu(value: Boolean) = edit { it.copy(useNpu = value) }
+
+    fun setUserSkills(value: List<Skill>) = edit { it.copy(userSkills = value) }
 
     private fun edit(change: (AppSettings) -> AppSettings) {
         edits.value = edits.value + change

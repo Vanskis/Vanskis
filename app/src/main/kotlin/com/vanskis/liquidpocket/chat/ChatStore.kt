@@ -39,6 +39,8 @@ data class Turn(
     val caption: String? = null,
     /** USER turns: the date, time and phone state when it was sent ([EnvironmentAnchor]). Sent, never shown. */
     val context: String? = null,
+    /** USER turns: the skill the chat had when it was sent; the newest one's is the chat's on reopening. */
+    val skill: Skill? = null,
 ) {
     /** A user turn the app added for a tool, not one the user wrote. */
     val fromTool: Boolean get() = role == Role.USER && toolName != null

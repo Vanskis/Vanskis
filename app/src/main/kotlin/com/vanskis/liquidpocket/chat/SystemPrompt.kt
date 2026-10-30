@@ -51,18 +51,22 @@ object SystemPrompt {
 
     const val CUSTOM_HEADER = "Custom instructions from the user:"
 
+    /** Followed by the chat's skill name and instructions, which apply to every reply until the user drops it. */
+    const val SKILL_HEADER = "Skill for this chat:"
+
     /**
      * [custom] is the user's free-text instructions from Settings, added after the facts; blank adds
      * nothing and anything past [MAX_CUSTOM_CHARS] is cut. [webSearch] (with [tools]) adds [WEB_SEARCH_LINE].
      */
-    fun build(facts: List<String>, tools: Boolean = false, custom: String = "", webSearch: Boolean = false): String {
+    fun build(facts: List<String>, tools: Boolean = false, custom: String = "", webSearch: Boolean = false, skill: Skill? = null): String {
         val toolLines = if (webSearch) "$TOOLS_LINE\n$WEB_SEARCH_LINE" else TOOLS_LINE
         val base = if (tools) "$SYSTEM_PROMPT\n$toolLines" else SYSTEM_PROMPT
         val used = normalize(facts.take(fittingCount(facts)))
         val withFacts =
             if (used.isEmpty()) base else base + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }
         val extra = custom.trim().take(MAX_CUSTOM_CHARS).trim()
-        return if (extra.isEmpty()) withFacts else withFacts + "\n\n" + CUSTOM_HEADER + "\n" + extra
+        val withCustom = if (extra.isEmpty()) withFacts else withFacts + "\n\n" + CUSTOM_HEADER + "\n" + extra
+        return if (skill == null) withCustom else withCustom + "\n\n" + SKILL_HEADER + " " + skill.name + "\n" + skill.instructions
     }
 
     private val WHITESPACE = Regex("\\s+")
