@@ -21,6 +21,10 @@ data class Turn(
     val toolName: String? = null,
     /** Pixels sent with a [fromTool] turn. Kept in memory only, not saved. */
     val images: List<ImageInput> = emptyList(),
+    /** ASSISTANT turns: the model's reasoning before [text]. Shown, never sent back to the engine. */
+    val thinking: String? = null,
+    /** ASSISTANT turns with [thinking]: how long the model thought, in milliseconds. */
+    val thinkingMillis: Long? = null,
 ) {
     /** A user turn the app added for a tool, not one the user wrote. */
     val fromTool: Boolean get() = role == Role.USER && toolName != null

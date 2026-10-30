@@ -15,6 +15,7 @@ import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.engine.ToolCall
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -50,6 +51,9 @@ class ChatControllerTest {
         var speech: List<FloatArray> = emptyList()
         var chats = 0
         var tokens = Channel<String>(Channel.UNLIMITED)
+        /** Reasoning emitted before anything else, then [thinkingMs] of (virtual) time passes. */
+        var thinking: List<String> = emptyList()
+        var thinkingMs = 0L
 
         override suspend fun load(modelPath: String, config: EngineConfig) {
             loadFailure?.let { throw it }
@@ -68,6 +72,8 @@ class ChatControllerTest {
             val ready = state.value
             state.value = EngineState.Generating
             try {
+                thinking.forEach { emit(ReplyChunk.Thinking(it)) }
+                delay(thinkingMs)
                 speech.forEach { emit(ReplyChunk.Audio(it)) }
                 for (t in tokens) emit(ReplyChunk.Text(t))
                 // Like the real engine, tool calls come once the text ends; they are not reply text.
@@ -138,9 +144,10 @@ class ChatControllerTest {
 
     private class RecordingSink : ReplySink {
         val audio = mutableListOf<FloatArray>()
-        val finished = mutableListOf<Pair<String, Boolean>>()
+        /** Per finished reply: its text, completed, spoke. */
+        val finished = mutableListOf<Triple<String, Boolean, Boolean>>()
         override fun audio(samples: FloatArray) { audio += samples }
-        override fun finished(text: String, completed: Boolean) { finished += text to completed }
+        override fun finished(text: String, completed: Boolean, spoke: Boolean) { finished += Triple(text, completed, spoke) }
     }
 
     private val engine = FakeEngine()
@@ -149,7 +156,9 @@ class ChatControllerTest {
     private val sink = RecordingSink()
     private val params = GenerationParams()
 
-    private fun TestScope.controller() = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), media = media, sink = sink)
+    private fun TestScope.controller() = ChatController(
+        engine, store, this, StandardTestDispatcher(testScheduler), media = media, sink = sink, clock = { testScheduler.currentTime },
+    )
 
     private val omni = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
 
@@ -580,7 +589,7 @@ class ChatControllerTest {
         exchange(c, "hi", "Hello")
 
         assertEquals(listOf(a, b), sink.audio)
-        assertEquals(listOf("Hello" to true), sink.finished)
+        assertEquals("finished, and spoken by the model", listOf(Triple("Hello", true, true)), sink.finished)
         assertEquals("Hello", c.state.value.turns.last().text)
     }
 
@@ -593,7 +602,68 @@ class ChatControllerTest {
         c.stop()
         advanceUntilIdle()
 
-        assertEquals(listOf("Hel" to false), sink.finished)
+        assertEquals("not completed, and not spoken", listOf(Triple("Hel", false, false)), sink.finished)
+    }
+
+    @Test fun `a finished reply without speech is reported as not spoken`() = runTest {
+        engine.capabilities.value = omni
+        val c = controller()
+        c.ready()
+        exchange(c, "hi", "Hello")
+
+        assertEquals(listOf(Triple("Hello", true, false)), sink.finished)
+    }
+
+    @Test fun `thinking streams apart from the reply and is kept on the turn with how long it took`() = runTest {
+        val c = controller()
+        c.ready()
+        engine.thinking = listOf("17 * 23 ", "= 391.")
+        engine.thinkingMs = 1500
+        c.send("What is 17 * 23?", params)
+        runCurrent()
+        assertEquals("17 * 23 = 391.", c.state.value.streamingThinking)
+        assertEquals("", c.state.value.streaming)
+        assertTrue("thinking is on by default", engine.sentParams!!.think)
+
+        engine.reply("391.")
+        advanceUntilIdle()
+
+        val s = c.state.value
+        val answer = s.turns.last()
+        assertEquals("391.", answer.text)
+        assertEquals("17 * 23 = 391.", answer.thinking)
+        assertEquals(1500L, answer.thinkingMillis)
+        assertNull(s.streamingThinking)
+        assertEquals(answer, store.saved.getValue(1L).last())
+        assertEquals("only the answer is spoken", "391.", sink.finished.single().first)
+    }
+
+    @Test fun `earlier thinking is never sent back to the engine`() = runTest {
+        val c = controller()
+        c.ready()
+        engine.thinking = listOf("The user greets me.")
+        exchange(c, "hi", "Hello!")
+        assertEquals("The user greets me.", c.state.value.turns.last().thinking)
+
+        engine.thinking = emptyList()
+        exchange(c, "how are you?", "Fine.")
+
+        val sent = engine.sent!!
+        assertEquals(listOf(Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.USER), sent.map { it.role })
+        assertEquals("Hello!", sent[2].content)
+        assertTrue(sent.none { it.content.contains("greets") })
+    }
+
+    @Test fun `the think setting reaches the engine`() = runTest {
+        val c = controller()
+        c.ready()
+        c.think = false
+        exchange(c, "hi", "Hello")
+        assertFalse(engine.sentParams!!.think)
+
+        c.think = true
+        exchange(c, "again", "Hello")
+        assertTrue(engine.sentParams!!.think)
     }
 
     @Test fun `speak is passed only when the model can speak`() = runTest {

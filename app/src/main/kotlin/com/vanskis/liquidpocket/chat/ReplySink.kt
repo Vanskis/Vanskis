@@ -5,8 +5,11 @@ interface ReplySink {
     /** Speech samples at the model's audio-out rate, as they arrive. Called on the main thread; must not block. */
     fun audio(samples: FloatArray) {}
 
-    /** The reply ended with [text]; [completed] is false when it was stopped or failed. */
-    fun finished(text: String, completed: Boolean) {}
+    /**
+     * The reply ended with [text]; [completed] is false when it was stopped or failed. [spoke] is
+     * true when the model produced speech for it ([audio] was called), see [VoiceRoute.androidSpeaks].
+     */
+    fun finished(text: String, completed: Boolean, spoke: Boolean) {}
 
     companion object {
         val NONE: ReplySink = object : ReplySink {}
