@@ -18,7 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.lifecycleScope
 import com.vanskis.liquidpocket.access.LaunchIntents
 import com.vanskis.liquidpocket.access.SharedDocuments
 import com.vanskis.liquidpocket.chat.ChatViewModel
@@ -27,6 +26,7 @@ import com.vanskis.liquidpocket.ui.LiquidPocketTheme
 import com.vanskis.liquidpocket.ui.MemoryScreen
 import com.vanskis.liquidpocket.ui.SettingsScreen
 import com.vanskis.liquidpocket.ui.SetupScreen
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,10 +70,15 @@ class MainActivity : ComponentActivity() {
         val request = LaunchIntents.parse(this, intent) ?: return
         chat.openLaunch(request)
         // Copied now, while the sender's URI grant lasts; the chat picks them up from SharedInbox.
+        // In the app's scope, so a rotation does not cancel the copy.
+        val app = application as LiquidPocketApp
         for (uri in request.documents) {
-            lifecycleScope.launch {
+            app.appScope.launch {
                 runCatching { withContext(Dispatchers.IO) { SharedDocuments.import(applicationContext, uri) } }
-                    .onFailure { chat.showError("Could not add the shared document: ${it.message ?: it.javaClass.simpleName}") }
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        chat.showError("Could not add the shared document: ${it.message ?: it.javaClass.simpleName}")
+                    }
             }
         }
         launches++

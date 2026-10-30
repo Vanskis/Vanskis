@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -56,7 +57,8 @@ fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
     // The model a dialog (or the notification permission request) is about; null when none is open.
     var askMetered by remember { mutableStateOf<ModelSpec?>(null) }
     var askDelete by remember { mutableStateOf<ModelSpec?>(null) }
-    var requested by remember { mutableStateOf<ModelSpec?>(null) }
+    // Saved as the model id, so a rotation with the permission dialog up still starts the download.
+    var requestedId by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
     BackHandler(enabled = status == DownloadStatus.Ready, onBack = onOpenChat)
@@ -76,8 +78,8 @@ fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
     // Ask for the notification permission first so the progress notification can show; the
     // download starts whatever the answer is.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        requested?.let(::startDownload)
-        requested = null
+        listOf(vm.model, vm.mediaModel).firstOrNull { it.id == requestedId }?.let(::startDownload)
+        requestedId = null
     }
     fun onDownload(spec: ModelSpec) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -85,7 +87,7 @@ fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
         if (granted) {
             startDownload(spec)
         } else {
-            requested = spec
+            requestedId = spec.id
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }

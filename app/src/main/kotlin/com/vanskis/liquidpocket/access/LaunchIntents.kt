@@ -24,6 +24,7 @@ object LaunchIntents {
                 streams = streams,
                 start = intent.getStringExtra(LaunchRequest.EXTRA_START),
                 fromOwnEntry = intent.component?.className == OWN_ENTRY,
+                fromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
             ),
         )
     }

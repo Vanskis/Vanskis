@@ -14,7 +14,7 @@ object SharedDocuments {
         val resolver = context.contentResolver
         val name = SharedInbox.safeFileName(displayName(context, uri))
         val mime = runCatching { resolver.getType(uri) }.getOrNull() ?: LaunchRequest.MIME_PDF
-        val dir = File(context.filesDir, "shared").apply { mkdirs() }
+        val dir = File(context.filesDir, SharedInbox.SHARED_DIR).apply { mkdirs() }
         val target = File(dir, "${UUID.randomUUID()}-$name")
         try {
             val input = resolver.openInputStream(uri) ?: throw IOException("Could not open $name")
@@ -24,6 +24,11 @@ object SharedDocuments {
             throw e
         }
         return SharedDocument(name, mime, target.path).also(SharedInbox::add)
+    }
+
+    /** Deletes what a previous process left in the shared folder; call at app start, when the inbox is empty. */
+    fun clearStored(context: Context) {
+        File(context.filesDir, SharedInbox.SHARED_DIR).listFiles()?.forEach { it.delete() }
     }
 
     private fun displayName(context: Context, uri: Uri): String? = runCatching {
