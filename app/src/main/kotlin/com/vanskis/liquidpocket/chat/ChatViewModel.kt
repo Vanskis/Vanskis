@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.SMART_MODEL
+import com.vanskis.liquidpocket.access.LaunchRequest
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.EngineState
@@ -218,6 +219,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         val on = !settings.value.speakReplies
         if (!on) silence()
         viewModelScope.launch { graph.settings.setSpeakReplies(on) }
+    }
+
+    private val _launch = MutableStateFlow<LaunchRequest.NewChat<Uri>?>(null)
+
+    /** The latest share, widget or tile request, for the screen to start the mic or focus the field, then [launchHandled]. */
+    val launch: StateFlow<LaunchRequest.NewChat<Uri>?> = _launch.asStateFlow()
+
+    /** Opens a new chat for [request]: shared photos wait to be sent, shared text goes into the field (access/). */
+    fun openLaunch(request: LaunchRequest.NewChat<Uri>) {
+        newChat()
+        request.images.forEach(::attachPhoto)
+        request.prefill?.let { _transcript.value = it }
+        _launch.value = request
+    }
+
+    fun launchHandled() {
+        _launch.value = null
     }
 
     /** Attaches a photo from the picker. */

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The share target, home-screen widget and Quick Settings tile (access/). -->
+<resources>
+    <string name="ask_widget_hint">Ask Liquid Pocket</string>
+    <string name="ask_widget_voice">Ask by voice</string>
+    <string name="ask_widget_description">Start a new chat by typing or speaking.</string>
+
+    <!-- Wallpaper colors; the night variants are in values-night/access.xml. -->
+    <color name="ask_widget_surface">@android:color/system_neutral1_50</color>
+    <color name="ask_widget_on_surface">@android:color/system_neutral1_800</color>
+    <color name="ask_widget_accent">@android:color/system_accent1_600</color>
+    <color name="ask_widget_on_accent">@android:color/system_accent1_0</color>
+</resources>

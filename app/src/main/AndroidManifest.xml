@@ -36,15 +36,63 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LiquidPocket">
 
+        <!-- singleTask: one chat screen; shares, the widget and the tile reach it in onNewIntent. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share target: text and links, photos, PDFs (access/LaunchRequest.kt). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
         </activity>
+
+        <!-- The widget's and tile's entry. Not exported: only this app's own PendingIntents reach it,
+             so it alone may start the mic (access/LaunchIntents.kt). -->
+        <activity-alias
+            android:name=".access.QuickLaunch"
+            android:exported="false"
+            android:targetActivity=".MainActivity" />
+
+        <!-- Home-screen widget: "Ask Liquid Pocket" and a mic button. -->
+        <receiver
+            android:name=".access.AskWidget"
+            android:exported="false"
+            android:label="@string/ask_widget_hint">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ask_widget_info" />
+        </receiver>
+
+        <!-- Quick Settings tile: opens a new chat. -->
+        <service
+            android:name=".access.NewChatTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_droplet"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!-- Hands the camera app a file in the cache to write the photo into. -->
         <provider
