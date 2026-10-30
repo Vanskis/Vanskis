@@ -368,6 +368,8 @@ class ChatController(
                         is ReplyChunk.Text -> _state.update { it.copy(streaming = (it.streaming ?: "") + chunk.text) }
                         is ReplyChunk.Audio -> sink.audio(chunk.samples)
                         is ReplyChunk.ToolCall -> calls += chunk.call
+                        // Shown once the chat stores reasoning; until then it is not part of the reply.
+                        is ReplyChunk.Thinking -> Unit
                     }
                 }
         } catch (e: CancellationException) {
