@@ -1,5 +1,7 @@
 package com.vanskis.liquidpocket.chat
 
+import com.vanskis.liquidpocket.docs.DocumentFormat
+import com.vanskis.liquidpocket.docs.ExtractedDocument
 import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
@@ -178,11 +180,15 @@ class ChatControllerTest {
     private val engine = FakeEngine()
     private val store = FakeStore()
     private val media = FakeMedia()
+    /** Saved documents by id, for the controller's [DocumentLoader]. */
+    private val docs = mutableMapOf<String, ExtractedDocument>()
+    private val documents = DocumentLoader { docs[it] }
     private val sink = RecordingSink()
     private val params = GenerationParams()
 
     private fun TestScope.controller() = ChatController(
-        engine, store, this, StandardTestDispatcher(testScheduler), media = media, sink = sink, clock = { testScheduler.currentTime },
+        engine, store, this, StandardTestDispatcher(testScheduler), media = media, documents = documents, sink = sink,
+        clock = { testScheduler.currentTime },
     )
 
     private val omni = Capabilities(vision = true, audioIn = true, audioOut = true, audioInSampleRate = 16000, audioOutSampleRate = 24000)
@@ -618,6 +624,50 @@ class ChatControllerTest {
         val user = engine.sent!!.last()
         assertEquals(MediaNotes.IMAGE_MISSING, user.content)
         assertTrue(user.images.isEmpty())
+        assertNull(c.state.value.error)
+    }
+
+    private val report = ExtractedDocument("report.pdf", DocumentFormat.PDF_MIME, listOf("Revenue grew 12% in Q3."))
+
+    @Test fun `a document's text goes in front of the user's text, which is saved as written`() = runTest {
+        docs["d1"] = report
+        val c = controller()
+        c.ready()
+        engine.reply("12%")
+        c.send("How much did revenue grow?", params, listOf(Attachment("d1", AttachmentKind.DOCUMENT, "report.pdf")))
+        advanceUntilIdle()
+
+        val user = engine.sent!!.last()
+        assertEquals("From report.pdf (full text):\nRevenue grew 12% in Q3.\n\nHow much did revenue grow?", user.content)
+        assertTrue(user.images.isEmpty() && user.audio.isEmpty())
+        assertEquals("How much did revenue grow?", c.state.value.turns[0].text)
+    }
+
+    @Test fun `a message with only a document routes to the text model and is named after it`() = runTest {
+        docs["d1"] = report
+        val models = object : ModelTargets {
+            override suspend fun text() = LoadTarget("/text.gguf", null, 8192)
+            override suspend fun media() = LoadTarget("/omni.gguf", "/omni-mmproj.gguf", 8192)
+        }
+        val c = ChatController(
+            engine, store, this, StandardTestDispatcher(testScheduler), media = media, documents = documents, models = models,
+        )
+        engine.reply("A report")
+        assertTrue(c.send("", params, listOf(Attachment("d1", AttachmentKind.DOCUMENT, "report.pdf"))))
+        advanceUntilIdle()
+
+        assertEquals(listOf("/text.gguf"), engine.loads.map { it.first })
+        assertEquals("report.pdf", store.titles.getValue(1L))
+    }
+
+    @Test fun `a document that is gone becomes a note`() = runTest {
+        val c = controller()
+        c.ready()
+        engine.reply("ok")
+        c.send("summarize it", params, listOf(Attachment("d-gone", AttachmentKind.DOCUMENT, "old.pdf")))
+        advanceUntilIdle()
+
+        assertEquals("summarize it\n\n${MediaNotes.DOCUMENT_MISSING}", engine.sent!!.last().content)
         assertNull(c.state.value.error)
     }
 

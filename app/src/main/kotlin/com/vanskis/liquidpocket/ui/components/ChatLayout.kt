@@ -135,8 +135,10 @@ fun ChatLayout(
     val ready = status == ModelStatus.Ready && !state.busy
     // Editing applies to the newest user turn; it lapses if that turn goes away.
     val isEditing = editing && state.lastUserIndex >= 0 && !state.generating
-    // Pending attachments go with a new message; an edit keeps the turn's own.
-    val canSend = ready && (input.isNotBlank() || (!isEditing && media.pending.isNotEmpty()))
+    // Pending attachments go with a new message; an edit keeps the turn's own. A document still being
+    // read would miss the message it was meant for, so sending waits for it.
+    val canSend = ready && (input.isNotBlank() || (!isEditing && media.pending.isNotEmpty())) &&
+        (isEditing || media.extracting.isEmpty())
 
     fun closeDrawerThen(action: () -> Unit) {
         editing = false
@@ -219,9 +221,15 @@ fun ChatLayout(
                     onCancelEdit = { editing = false; input = "" },
                     pending = if (isEditing) emptyList() else media.pending,
                     onRemovePending = media.onRemovePending,
+                    extracting = if (isEditing) emptyList() else media.extracting,
+                    onCancelExtraction = media.onCancelExtraction,
+                    shared = if (isEditing) emptyList() else media.shared,
+                    onUseShared = media.onUseShared,
                     attachEnabled = status == ModelStatus.Ready && !state.loading,
                     onPickPhoto = media.onPickPhoto,
                     onTakePhoto = media.onTakePhoto,
+                    onPickDocument = media.onPickDocument,
+                    focusRequester = media.focusRequester,
                     onMic = media.onMic,
                     recordingMillis = media.recordingMillis,
                     think = think,

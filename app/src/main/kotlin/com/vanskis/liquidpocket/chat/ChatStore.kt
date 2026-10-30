@@ -40,10 +40,14 @@ data class Turn(
     val fromTool: Boolean get() = role == Role.USER && toolName != null
 }
 
-enum class AttachmentKind { IMAGE, AUDIO }
+enum class AttachmentKind { IMAGE, AUDIO, DOCUMENT }
 
-/** A file in the app's private storage attached to a message. */
-data class Attachment(val path: String, val kind: AttachmentKind)
+/**
+ * A file in the app's private storage attached to a message. For a DOCUMENT, [path] is the id the
+ * extracted text is saved under ([com.vanskis.liquidpocket.docs.DocumentStore]) and [name] the file
+ * name shown on its chip.
+ */
+data class Attachment(val path: String, val kind: AttachmentKind, val name: String? = null)
 
 data class Conversation(val id: Long, val title: String, val createdAt: Long, val updatedAt: Long)
 
