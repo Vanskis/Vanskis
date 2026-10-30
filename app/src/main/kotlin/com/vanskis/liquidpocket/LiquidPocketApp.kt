@@ -7,6 +7,7 @@ import com.vanskis.liquidpocket.core.ModelCatalog
 import com.vanskis.liquidpocket.core.ModelInstaller
 import com.vanskis.liquidpocket.data.AppDatabase
 import com.vanskis.liquidpocket.data.ChatRepository
+import com.vanskis.liquidpocket.docs.DocumentStore
 import com.vanskis.liquidpocket.download.ModelDownloads
 import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.Engines
@@ -34,6 +35,8 @@ class LiquidPocketApp : Application() {
     val database: AppDatabase by lazy { AppDatabase.create(this) }
     val chats: ChatRepository by lazy { ChatRepository(database.chatDao()) }
     val attachments: AttachmentFiles by lazy { AttachmentFiles(this) }
+    /** Attached documents' extracted text, by the id a DOCUMENT attachment keeps in its path. */
+    val documents: DocumentStore by lazy { DocumentStore(File(filesDir, "docs")) }
     /** Decoded photos and clips for the engine, cached because every reply resends the whole history. */
     val media: MediaLoader by lazy { CachingMediaLoader(AndroidMediaLoader()) }
 

@@ -24,11 +24,14 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
@@ -38,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.MEDIA_MODEL
+import com.vanskis.liquidpocket.access.SharedInbox
 import com.vanskis.liquidpocket.chat.ChatViewModel
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.modelStatus
@@ -63,6 +67,8 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val transcript by vm.transcript.collectAsStateWithLifecycle()
     val think by vm.think.collectAsStateWithLifecycle()
     val live by vm.live.collectAsStateWithLifecycle()
+    val extracting by vm.extracting.collectAsStateWithLifecycle()
+    val shared by SharedInbox.pendingDocuments.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
 
@@ -79,6 +85,9 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
 
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.attachPhoto(uri)
+    }
+    val pickDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.attachDocument(uri)
     }
     // Saved, as the camera app may outlive this activity.
     var capturePath by rememberSaveable { mutableStateOf<String?>(null) }
@@ -107,12 +116,20 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.stopLive() }
 
-    // The widget's mic button opens a new chat listening (access/LaunchRequest.kt).
+    // The widget's mic button opens a new chat listening, its Ask one with the keyboard up (access/LaunchRequest.kt).
     val launch by vm.launch.collectAsStateWithLifecycle()
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(launch) {
         val request = launch ?: return@LaunchedEffect
-        vm.launchHandled()
         if (request.startVoice && recordingMillis == null) onMic()
+        if (request.focusInput) {
+            withFrameNanos {} // the field is attached to the requester once a frame is laid out
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+        // Last: clearing it recomposes with a new key, which would cancel this effect mid-wait.
+        vm.launchHandled()
     }
 
     val status = modelStatus(engineState, state)
@@ -124,9 +141,15 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val media = ChatMediaUi(
         pending = pending,
         onRemovePending = vm::removePending,
+        extracting = extracting,
+        onCancelExtraction = { vm.cancelExtraction(it.key) },
+        shared = shared,
+        onUseShared = vm::useSharedDocument,
         onPickPhoto = {
             pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
+        onPickDocument = { pickDocument.launch(arrayOf("application/pdf", "text/*")) },
+        focusRequester = focusRequester,
         onTakePhoto = if (!hasCamera) null else fun() {
             val (file, uri) = vm.newCameraCapture()
             capturePath = file.path
