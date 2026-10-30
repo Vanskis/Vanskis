@@ -300,6 +300,31 @@ class LiveTurns {
     }
 }
 
+/**
+ * What the user said in live voice that has not reached the chat yet. Each turn is [take]n with what
+ * is still here, and stays until it is [clear]ed (sent, or dropped for good), so a turn whose send
+ * new speech cut short goes in front of the next turn rather than being lost.
+ */
+class LiveUnsent {
+    private var text = ""
+    private var clip = FloatArray(0)
+
+    /** Nothing is waiting. */
+    val isEmpty: Boolean get() = text.isEmpty() && clip.isEmpty()
+
+    /** Adds the turn just heard ([text] from the recognizer, or the [clip] itself) and returns all that is unsent. */
+    fun take(text: String, clip: FloatArray): Pair<String, FloatArray> {
+        this.text = listOf(this.text, text.trim()).filter { it.isNotEmpty() }.joinToString(" ")
+        this.clip += clip
+        return this.text to this.clip
+    }
+
+    fun clear() {
+        text = ""
+        clip = FloatArray(0)
+    }
+}
+
 /** What the live voice screen shows: the phase, the mic level (0..1) for the orb, and the model. */
 data class LiveUi(val phase: LivePhase, val level: Float, val model: LiveVoiceModel)
 

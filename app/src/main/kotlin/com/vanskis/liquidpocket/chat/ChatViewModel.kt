@@ -495,6 +495,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private var liveRecognizing = false
     /** What Android's recognizer heard of the turn (1.7B mode). */
     private var liveTranscript: String? = null
+    /** What was heard and has not reached the chat; a send that new speech cut short goes with the next turn. */
+    private val liveUnsent = LiveUnsent()
     /** The finished reply's text, and whether the model's own voice played it. */
     private var liveReply: String? = null
     private var liveAudio = false
@@ -560,6 +562,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         liveDictation.cancel()
         liveRecognizing = false
         liveTranscript = null
+        liveUnsent.clear()
         liveReply = null
         if (!keepReply) {
             if (turns.generating) controller.stop()
@@ -599,18 +602,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         }
     }
 
-    /** Sends the turn into the chat: Omni hears the clip, 1.7B reads what Android heard. */
+    /**
+     * Sends the turn into the chat: Omni hears the clip, 1.7B reads what Android heard. A turn whose
+     * send new speech cut short ([liveUnsent]) goes in front of it.
+     */
     private fun sendLiveTurn() {
         val model = liveModel
-        val clip = if (model == LiveVoiceModel.OMNI) liveCapture?.takeTurn() else null
-        val text = if (model == LiveVoiceModel.TEXT) liveTranscript.orEmpty() else ""
+        val heard = if (model == LiveVoiceModel.OMNI) liveCapture?.takeTurn() ?: FloatArray(0) else FloatArray(0)
+        val (text, clip) = liveUnsent.take(if (model == LiveVoiceModel.TEXT) liveTranscript.orEmpty() else "", heard)
         liveTranscript = null
         liveSend?.cancel()
         liveSend = viewModelScope.launch {
             var file: File? = null
             var sent = false
             try {
-                val attachments = if (clip == null || clip.isEmpty()) {
+                val attachments = if (clip.isEmpty()) {
                     emptyList()
                 } else {
                     val saved = withContext(Dispatchers.IO) { files.saveVoice(clip, VoiceRoute.RECORD_SAMPLE_RATE) }
@@ -621,6 +627,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                 withTimeoutOrNull(LIVE_SEND_WAIT_MS) { controller.state.first { !it.busy } }
                 sent = controller.send(text, params().copy(speak = model == LiveVoiceModel.OMNI), attachments)
             } catch (e: CancellationException) {
+                // Cut short by new speech: what was heard stays in liveUnsent for the next turn.
                 throw e
             } catch (e: Exception) {
                 controller.showError("Could not send the voice message: ${e.message ?: e.javaClass.simpleName}")
@@ -628,6 +635,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                 val unsent = file?.takeIf { !sent }
                 if (unsent != null) viewModelScope.launch(Dispatchers.IO) { files.delete(unsent.path) }
             }
+            // Sent, or dropped for good: either way it does not go with the next turn.
+            liveUnsent.clear()
             liveEvent(if (sent) LiveEvent.Sent else LiveEvent.TurnDropped)
         }
     }
@@ -718,7 +727,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         liveRecognizing = false
         val turns = liveTurns ?: return
         when {
-            liveTranscript != null -> {
+            // A turn cut short waits in liveUnsent: send it even when nothing more was heard.
+            liveTranscript != null || !liveUnsent.isEmpty -> {
                 if (turns.phase == LivePhase.LISTENING) liveEvent(LiveEvent.SpeechStart)
                 liveEvent(LiveEvent.SpeechEnd)
             }

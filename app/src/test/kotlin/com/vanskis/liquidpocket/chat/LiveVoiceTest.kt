@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -132,6 +133,21 @@ class LiveVoiceTest {
         turns.on(LiveEvent.SpeechEnd)
         assertEquals(listOf(LiveAction.LISTEN), turns.on(LiveEvent.TurnDropped))
         assertEquals(LivePhase.LISTENING, turns.phase)
+    }
+
+    @Test fun `a turn whose send was cut short goes in front of the next one`() {
+        val unsent = LiveUnsent()
+        assertTrue(unsent.isEmpty)
+        // The first turn's send waits for the chat, then new speech cancels it: nothing clears it.
+        unsent.take("What's the weather", floatArrayOf(0.1f, 0.2f))
+        assertFalse(unsent.isEmpty)
+        val (text, clip) = unsent.take(" in Paris? ", floatArrayOf(0.3f))
+        assertEquals("What's the weather in Paris?", text)
+        assertArrayEquals(floatArrayOf(0.1f, 0.2f, 0.3f), clip, 0f)
+
+        unsent.clear()
+        assertTrue(unsent.isEmpty)
+        assertEquals("Thanks" to 0, unsent.take("Thanks", FloatArray(0)).let { it.first to it.second.size })
     }
 
     @Test fun `live voice uses Omni when it is installed unless 1_7B was chosen`() {
