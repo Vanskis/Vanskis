@@ -25,6 +25,11 @@ data class Turn(
     val thinking: String? = null,
     /** ASSISTANT turns with [thinking]: how long the model thought, in milliseconds. */
     val thinkingMillis: Long? = null,
+    /**
+     * A SYSTEM turn the app wrote: a summary of the turns before it (and of any summary before
+     * those). From here on the engine sees this summary and the turns after it, see [Compaction].
+     */
+    val summary: Boolean = false,
 ) {
     /** A user turn the app added for a tool, not one the user wrote. */
     val fromTool: Boolean get() = role == Role.USER && toolName != null
@@ -55,6 +60,15 @@ interface ChatStore {
 
     /** Deletes the conversation's turns from position [fromIndex] (0 is the oldest) on. */
     suspend fun truncate(conversationId: Long, fromIndex: Int)
+
+    /**
+     * Replaces the turns from position [fromIndex] on with [turns] (compaction puts a summary in
+     * front of the turns it keeps). Stores that can should do it in one transaction.
+     */
+    suspend fun replaceFrom(conversationId: Long, fromIndex: Int, turns: List<Turn>) {
+        truncate(conversationId, fromIndex)
+        turns.forEach { appendTurn(conversationId, it) }
+    }
 
     /** Deletes the conversation and its turns. */
     suspend fun deleteConversation(conversationId: Long)

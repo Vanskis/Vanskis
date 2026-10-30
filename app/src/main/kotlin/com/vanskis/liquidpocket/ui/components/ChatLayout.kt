@@ -18,13 +18,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,7 +39,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -219,9 +225,10 @@ fun ChatLayout(
                     recordingMillis = media.recordingMillis,
                     think = think,
                     onToggleThink = onToggleThink,
-                    contextUsed = contextTokensUsed(state.turns),
+                    contextUsed = state.contextUsed,
                     contextTotal = contextTotal,
-                    onCompact = onCompact,
+                    // Enabled only with more than a few turns since the newest summary, and nothing running.
+                    onCompact = onCompact?.takeIf { state.canCompact },
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -303,6 +310,7 @@ private fun MessageList(
                 val tool = turn?.takeIf { it.role != Role.USER && it.role != Role.ASSISTANT }
                 val confirmation = state.confirmation
                 when {
+                    turn != null && turn.summary -> SummaryDivider(turn.text)
                     turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
                     // A reply that only called tools: its tool turns that follow show what happened.
                     turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() -> Unit
@@ -350,6 +358,43 @@ private fun MessageList(
                 contentColor = MaterialTheme.colorScheme.onSurface,
             ) {
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to the newest message")
+            }
+        }
+    }
+}
+
+/**
+ * Where compaction summarized the turns above it: "Earlier messages summarized" between two rules.
+ * The turns above stay shown, but the model now sees only [summary] of them; a tap expands it.
+ */
+@Composable
+private fun SummaryDivider(summary: String) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HorizontalDivider(modifier = Modifier.weight(1f), color = colors.outlineVariant)
+            TextButton(onClick = { expanded = !expanded }) {
+                Text("Earlier messages summarized", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                Icon(
+                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Hide the summary" else "Show the summary",
+                    tint = colors.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp).size(18.dp),
+                )
+            }
+            HorizontalDivider(modifier = Modifier.weight(1f), color = colors.outlineVariant)
+        }
+        AnimatedVisibility(visible = expanded) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colors.surfaceContainerLow,
+                contentColor = colors.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                SelectionContainer {
+                    Text(summary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp))
+                }
             }
         }
     }

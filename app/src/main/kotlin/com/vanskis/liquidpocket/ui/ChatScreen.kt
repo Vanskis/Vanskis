@@ -157,8 +157,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             think = think,
             onToggleThink = vm::toggleThink,
             contextTotal = contextTotal,
-            // No compaction in the chat controller yet: the ring's Compact now stays disabled.
-            onCompact = null,
+            onCompact = vm::compact,
         )
     }
 }

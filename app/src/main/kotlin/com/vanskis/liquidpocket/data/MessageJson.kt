@@ -5,6 +5,7 @@ import com.vanskis.liquidpocket.chat.AttachmentKind
 import com.vanskis.liquidpocket.engine.ToolCall
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -36,11 +37,15 @@ object MessageJson {
     fun decodeToolCalls(json: String?): List<ToolCall> =
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
-    /** `{"thinking": "...", "thinkingMillis": 1234}`, a key left out when null. No extras is stored as null. */
+    /**
+     * `{"thinking": "...", "thinkingMillis": 1234, "summary": true}`, a key left out when null (or
+     * false, for `summary`). No extras is stored as null.
+     */
     fun encodeExtras(extras: MessageExtras): String? =
         if (extras.isEmpty) null else buildJsonObject {
             extras.thinking?.let { put("thinking", it) }
             extras.thinkingMillis?.let { put("thinkingMillis", it) }
+            if (extras.summary) put("summary", true)
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -51,6 +56,7 @@ object MessageJson {
             MessageExtras(
                 thinking = obj["thinking"]?.jsonPrimitive?.takeIf { it.isString }?.content,
                 thinkingMillis = obj["thinkingMillis"]?.jsonPrimitive?.longOrNull,
+                summary = obj["summary"]?.jsonPrimitive?.booleanOrNull == true,
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -63,7 +69,10 @@ object MessageJson {
     private fun JsonObject.string(key: String): String = getValue(key).jsonPrimitive.content
 }
 
-/** What a saved message keeps beyond its own columns: the reasoning of an assistant reply and how long it took. */
-data class MessageExtras(val thinking: String? = null, val thinkingMillis: Long? = null) {
-    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null
+/**
+ * What a saved message keeps beyond its own columns: the reasoning of an assistant reply and how
+ * long it took, and whether the message summarizes the turns before it ([com.vanskis.liquidpocket.chat.Turn.summary]).
+ */
+data class MessageExtras(val thinking: String? = null, val thinkingMillis: Long? = null, val summary: Boolean = false) {
+    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null && !summary
 }
