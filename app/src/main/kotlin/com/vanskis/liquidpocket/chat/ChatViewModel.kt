@@ -11,7 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.LiquidPocketApp
-import com.vanskis.liquidpocket.SMART_MODEL
+import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.access.LaunchRequest
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
@@ -59,26 +59,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val sink = object : ReplySink {
         override fun audio(samples: FloatArray) = player.enqueue(samples, graph.engine.capabilities.value.audioOutSampleRate)
 
-        override fun finished(text: String, completed: Boolean) {
+        override fun finished(text: String, completed: Boolean, spoke: Boolean) {
             val s = settings.value
-            if (completed && VoiceRoute.androidSpeaks(s.speakReplies, s.voiceEngine, graph.engine.capabilities.value)) {
-                speaker.speak(text)
-            }
+            if (completed && VoiceRoute.androidSpeaks(s.speakReplies, spoke)) speaker.speak(text)
         }
     }
 
     /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
     val permissions = PermissionGate(app)
     private val tools = phoneTools(graph, permissions) { settings.value.webSearch }
-    /** Omni stays loaded; the smart model takes its place for one reply, fetched over Wi-Fi the first time. */
+    /** LFM3-1.7B answers; Omni takes its place for photo and voice turns, when installed. */
     private val models = object : ModelTargets {
-        override suspend fun resident() = installed(ACTIVE_MODEL)
-        override suspend fun smart() = installed(SMART_MODEL)
-        override fun downloadSmart() = graph.downloads.download(SMART_MODEL, allowMetered = false)
+        override suspend fun text() = installed(ACTIVE_MODEL)
+        override suspend fun media() = installed(MEDIA_MODEL)
     }
 
     private val controller = ChatController(
         graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink, models = models,
+        customInstructions = { settings.value.customInstructions },
     )
 
     val state: StateFlow<ChatState> = controller.state
@@ -88,21 +86,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     val conversations: StateFlow<List<Conversation>> =
         graph.chats.conversations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** The smart model's download, shown while it runs. */
-    val smartDownload: StateFlow<DownloadStatus> =
-        graph.downloads.status(SMART_MODEL).stateIn(viewModelScope, SharingStarted.Eagerly, DownloadStatus.NotDownloaded(0))
+    /** Whether the media model is installed, so the mic records voice messages for it. */
+    private val mediaInstalled: StateFlow<Boolean> =
+        graph.downloads.status(MEDIA_MODEL).map { it == DownloadStatus.Ready }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** The Think chip: whether replies reason first. */
+    val think: StateFlow<Boolean> =
+        settings.map { it.think }.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings().think)
 
     init {
-        // A failed download is reported once, when it fails.
-        viewModelScope.launch {
-            var wasActive = false
-            smartDownload.collect { status ->
-                if (wasActive && status is DownloadStatus.Failed) {
-                    controller.showError("Could not download ${SMART_MODEL.displayName}: ${status.message}")
-                }
-                wasActive = status.active
-            }
-        }
+        viewModelScope.launch { think.collect { controller.think = it } }
     }
 
     val speakReplies: StateFlow<Boolean> =
@@ -132,21 +125,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         return GenerationParams(
             temperature = s.temperature,
             tools = tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
-            speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine, graph.engine.capabilities.value),
+            speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine),
         )
     }
 
-    /** Called each time the Chat screen opens; loads (or reloads, after a context change) the model. */
+    /** Called each time the Chat screen opens; loads (or reloads, after a context change) the model the chat routes to. */
     fun onChatOpened() {
         viewModelScope.launch {
-            val (file, mmproj) = withContext(Dispatchers.IO) {
-                graph.installer.installedFile(ACTIVE_MODEL) to graph.installer.installedMmproj(ACTIVE_MODEL)
-            }
-            if (file == null) {
+            if (models.text() == null && models.media() == null) {
                 controller.showError("${ACTIVE_MODEL.displayName} is not downloaded. Open Settings → Manage model.")
                 return@launch
             }
-            controller.ensureLoaded(file.path, graph.settings.settings.first().contextSize, mmproj?.path)
+            controller.ensureLoaded()
         }
     }
 
@@ -219,6 +209,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Reports a problem the screen ran into (a denied permission, no camera app). */
     fun showError(message: String) = controller.showError(message)
 
+    fun toggleThink() {
+        val on = !settings.value.think
+        viewModelScope.launch { graph.settings.setThink(on) }
+    }
+
     fun toggleSpeakReplies() {
         val on = !settings.value.speakReplies
         if (!on) silence()
@@ -286,9 +281,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                     controller.showError(MIC_PERMISSION)
                     return
                 }
-                val s = settings.value
-                val caps = graph.engine.capabilities.value
-                if (VoiceRoute.modelHears(s.voiceEngine, caps)) startRecording(caps.audioInSampleRate) else startDictation()
+                if (VoiceRoute.modelHears(settings.value.voiceEngine, mediaInstalled.value)) {
+                    startRecording(VoiceRoute.RECORD_SAMPLE_RATE)
+                } else {
+                    startDictation()
+                }
             }
         }
     }

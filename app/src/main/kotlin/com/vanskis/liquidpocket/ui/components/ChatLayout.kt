@@ -56,9 +56,6 @@ import com.vanskis.liquidpocket.chat.ChatSearchHit
 import com.vanskis.liquidpocket.chat.ChatState
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ModelStatus
-import com.vanskis.liquidpocket.chat.ModelSwap
-import com.vanskis.liquidpocket.download.DownloadStatus
-import com.vanskis.liquidpocket.download.percent
 import com.vanskis.liquidpocket.engine.Role
 import kotlinx.coroutines.launch
 
@@ -71,7 +68,7 @@ interface ChatActions {
     fun stop()
     fun regenerate()
 
-    /** Redoes the newest reply on the smart model, or starts its download when it is not installed. */
+    /** Redoes the newest reply on the text model, always thinking (whatever the Think chip says), with a larger budget. */
     fun thinkHarder()
     fun editAndResend(text: String)
     fun newChat()
@@ -105,8 +102,9 @@ fun ChatLayout(
     onShare: (title: String, markdown: String) -> Unit,
     onOpenSettings: () -> Unit,
     media: ChatMediaUi = ChatMediaUi(),
-    smartModelName: String = "",
-    smartDownload: DownloadStatus? = null,
+    /** Whether replies reason first: the composer's Think chip, shown when [onToggleThink] is given. */
+    think: Boolean = true,
+    onToggleThink: (() -> Unit)? = null,
     /** The loaded model's context window in tokens; 0 hides the composer's context ring. */
     contextTotal: Int = 0,
     /** Summarizes older turns to free context (the ring's Compact now); disabled when null. */
@@ -174,7 +172,7 @@ fun ChatLayout(
                         title = {
                             Column {
                                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                ModelStatusLine(status, modelName, state.swap, smartModelName)
+                                ModelStatusLine(status, modelName)
                             }
                         },
                         navigationIcon = {
@@ -200,7 +198,6 @@ fun ChatLayout(
                         },
                     )
                     if (status == ModelStatus.Loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    smartDownload?.takeIf { it.active }?.let { SmartModelDownload(it, smartModelName) }
                 }
             },
             bottomBar = {
@@ -220,6 +217,8 @@ fun ChatLayout(
                     onTakePhoto = media.onTakePhoto,
                     onMic = media.onMic,
                     recordingMillis = media.recordingMillis,
+                    think = think,
+                    onToggleThink = onToggleThink,
                     contextUsed = contextTokensUsed(state.turns),
                     contextTotal = contextTotal,
                     onCompact = onCompact,
@@ -242,7 +241,6 @@ fun ChatLayout(
                     onCopy = onCopy,
                     onRegenerate = actions::regenerate,
                     onThinkHarder = actions::thinkHarder,
-                    thinkHarderEnabled = smartDownload?.active != true,
                     onEdit = { text ->
                         input = text
                         editing = true
@@ -269,7 +267,6 @@ private fun MessageList(
     onCopy: (String) -> Unit,
     onRegenerate: () -> Unit,
     onThinkHarder: () -> Unit,
-    thinkHarderEnabled: Boolean,
     onEdit: (String) -> Unit,
     onApproveTool: (confirmationId: Long) -> Unit,
     onDeclineTool: (confirmationId: Long) -> Unit,
@@ -333,7 +330,8 @@ private fun MessageList(
                             onCopy = { onCopy(text) },
                             onRegenerate = if (newest) onRegenerate else null,
                             onThinkHarder = if (newest) onThinkHarder else null,
-                            thinkHarderEnabled = thinkHarderEnabled,
+                            thinking = if (turn == null) state.streamingThinking else turn.thinking,
+                            thinkingSeconds = turn?.thinkingMillis?.let { (it / 1000).toInt() },
                         )
                     }
                 }
@@ -357,20 +355,15 @@ private fun MessageList(
     }
 }
 
-/** "● LFM3-Omni-2B · Ready" under the title; while a reply is swapped to [smartModelName], where that swap is. */
+/** "● LFM3-1.7B · Ready" under the title. */
 @Composable
-private fun ModelStatusLine(status: ModelStatus, modelName: String, swap: ModelSwap?, smartModelName: String) {
+private fun ModelStatusLine(status: ModelStatus, modelName: String) {
     val colors = MaterialTheme.colorScheme
-    val (label, dot) = when (swap) {
-        ModelSwap.TO_SMART -> "Switching to $smartModelName…" to colors.tertiary
-        ModelSwap.SMART -> "$smartModelName · Thinking harder…" to colors.tertiary
-        ModelSwap.BACK -> "Switching back to $modelName…" to colors.tertiary
-        null -> when (status) {
-            ModelStatus.Ready -> "$modelName · Ready" to Color(0xFF2E7D32)
-            ModelStatus.Loading -> "$modelName · Loading…" to colors.tertiary
-            ModelStatus.NotLoaded -> "$modelName · Not loaded" to colors.outline
-            is ModelStatus.Error -> "$modelName · Error" to colors.error
-        }
+    val (label, dot) = when (status) {
+        ModelStatus.Ready -> "$modelName · Ready" to Color(0xFF2E7D32)
+        ModelStatus.Loading -> "$modelName · Loading…" to colors.tertiary
+        ModelStatus.NotLoaded -> "$modelName · Not loaded" to colors.outline
+        is ModelStatus.Error -> "$modelName · Error" to colors.error
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = Modifier.size(8.dp).background(dot, CircleShape))
@@ -382,25 +375,5 @@ private fun ModelStatusLine(status: ModelStatus, modelName: String, swap: ModelS
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 6.dp),
         )
-    }
-}
-
-/** "Downloading LFM2.5-8B-A1B · 42%" with its progress, under the top bar while the smart model downloads. */
-@Composable
-private fun SmartModelDownload(status: DownloadStatus, smartModelName: String) {
-    val (label, fraction) = when (status) {
-        is DownloadStatus.Downloading -> percent(status.bytes, status.total).let { "Downloading $smartModelName · $it%" to it / 100f }
-        is DownloadStatus.Verifying -> percent(status.bytes, status.total).let { "Checking $smartModelName · $it%" to it / 100f }
-        DownloadStatus.Waiting -> "Waiting for Wi-Fi to download $smartModelName" to null
-        else -> "Preparing to download $smartModelName" to null
-    }
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Text(
-            "$label. Think harder works once it is done.",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val bar = Modifier.fillMaxWidth().padding(top = 4.dp)
-        if (fraction == null) LinearProgressIndicator(modifier = bar) else LinearProgressIndicator(progress = { fraction }, modifier = bar)
     }
 }

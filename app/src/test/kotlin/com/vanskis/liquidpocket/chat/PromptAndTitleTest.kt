@@ -37,6 +37,16 @@ class PromptAndTitleTest {
         assertTrue(SystemPrompt.build(emptyList(), tools = true, custom = "Be brief.").endsWith("\n\n${SystemPrompt.CUSTOM_HEADER}\nBe brief."))
     }
 
+    @Test fun `web search adds one line after the tools line`() {
+        assertEquals(
+            "$SYSTEM_PROMPT\n${SystemPrompt.TOOLS_LINE}\n${SystemPrompt.WEB_SEARCH_LINE}",
+            SystemPrompt.build(emptyList(), tools = true, webSearch = true),
+        )
+        assertTrue(SystemPrompt.WEB_SEARCH_LINE.contains("web_search"))
+        assertEquals("$SYSTEM_PROMPT\n${SystemPrompt.TOOLS_LINE}", SystemPrompt.build(emptyList(), tools = true))
+        assertEquals("not without tools", SYSTEM_PROMPT, SystemPrompt.build(emptyList(), webSearch = true))
+    }
+
     @Test fun `blank custom instructions add nothing`() {
         assertEquals(SYSTEM_PROMPT, SystemPrompt.build(emptyList(), custom = ""))
         assertEquals(SYSTEM_PROMPT, SystemPrompt.build(emptyList(), custom = " \n\t "))

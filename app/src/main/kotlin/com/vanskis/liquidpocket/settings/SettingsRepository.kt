@@ -32,6 +32,8 @@ data class AppSettings(
     val webSearch: Boolean = true,
     /** Free text added to the system prompt of every new chat; empty adds nothing. */
     val customInstructions: String = "",
+    /** Let the model reason before it answers (the composer's Think chip); Think harder always does. */
+    val think: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -56,6 +58,7 @@ class SettingsRepository(context: Context) {
                 voiceEngine = VoiceEngine.entries.firstOrNull { it.name == prefs[VOICE_ENGINE] } ?: VoiceEngine.MODEL,
                 webSearch = prefs[WEB_SEARCH] ?: true,
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
+                think = prefs[THINK] ?: true,
             )
         }
         .distinctUntilChanged()
@@ -88,6 +91,10 @@ class SettingsRepository(context: Context) {
         store.edit { it[CUSTOM_INSTRUCTIONS] = value.take(SystemPrompt.MAX_CUSTOM_CHARS) }
     }
 
+    suspend fun setThink(value: Boolean) {
+        store.edit { it[THINK] = value }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
@@ -96,5 +103,6 @@ class SettingsRepository(context: Context) {
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
         val WEB_SEARCH = booleanPreferencesKey("web_search")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
+        val THINK = booleanPreferencesKey("think")
     }
 }
