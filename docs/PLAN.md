@@ -103,3 +103,24 @@ v81 output reports, conv layers likely on CPU); DuckDuckGo lite is unofficial an
   Wallpaper (Material You, the default). Each sets colors, heading font and bubble shape and
   follows the system's light or dark mode.
 - **Mic:** the on-device recognizer, then the regular one, then the model's own audio input.
+
+## v5 (decided 2026-10-30)
+
+- **Deferred tools:** only the core tools are offered up front; tool_search lists the rest (math,
+  weather, phone controls and others) and loads one on request.
+- **Math:** the calculate tool runs math.js in an isolated JavaScript sandbox: 64-digit decimals,
+  fractions, algebra, units. Offline, no files or network.
+- **Environment anchor:** each user message starts with a [Sent ...] line: date, time and phone
+  state. The model relies on it and does not mention it unless it matters.
+- **Phone controls:** flashlight, volume, Do Not Disturb and similar, via tool_search.
+- **Skills:** typing / in the composer lists built-in skills (useful ones and fun ones such as
+  stories) and the user's own; the picked skill applies to the chat until dropped.
+- **Heretic:** Settings has a Standard/Heretic choice per model; Heretic downloads from a
+  user-entered Hugging Face GGUF repo (Q4_K_M first, then other quants).
+- **Live camera:** live voice can turn the camera on (back first, with flip and a small preview).
+  One frame per turn, taken when the user stops speaking, goes to Omni with the audio.
+- **NPU auto-pick:** the benchmark measures reply speed, prompt-reading speed and battery per reply
+  on the CPU and NPU. The NPU is kept on only where it wins (faster without clearly more battery).
+  It runs once quietly after the first model load, and again on Run benchmark; the switch stays as
+  a manual override.
+- **Math rendering:** \[...\] and \(...\) render like $$...$$ and $...$.

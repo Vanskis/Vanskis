@@ -11,6 +11,7 @@ import com.vanskis.liquidpocket.data.ChatRepository
 import com.vanskis.liquidpocket.docs.DocumentStore
 import com.vanskis.liquidpocket.download.ModelDownloads
 import com.vanskis.liquidpocket.engine.Engine
+import com.vanskis.liquidpocket.settings.NpuAutoPick
 import com.vanskis.liquidpocket.engine.Engines
 import com.vanskis.liquidpocket.media.AndroidMediaLoader
 import com.vanskis.liquidpocket.media.AttachmentFiles
@@ -40,6 +41,7 @@ class LiquidPocketApp : Application() {
     val downloads: ModelDownloads by lazy { ModelDownloads(this, installer) }
     val settings: SettingsRepository by lazy { SettingsRepository(this) }
     val engine: Engine by lazy { Engines.llama(this) }
+    val npuPick: NpuAutoPick by lazy { NpuAutoPick(this, engine, settings) }
     val database: AppDatabase by lazy { AppDatabase.create(this) }
     val chats: ChatRepository by lazy { ChatRepository(database.chatDao()) }
     val attachments: AttachmentFiles by lazy { AttachmentFiles(this) }
@@ -57,6 +59,7 @@ class LiquidPocketApp : Application() {
         // The NPU took the last process down (a native abort): asking for it again would crash the next reply.
         appScope.launch {
             if (engine.npuCrashedLastRun && settings.settings.first().useNpu) settings.setUseNpu(false)
+            npuPick.firstRun()
         }
     }
 }

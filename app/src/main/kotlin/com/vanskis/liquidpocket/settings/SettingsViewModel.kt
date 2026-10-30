@@ -15,7 +15,6 @@ import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,7 +25,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
@@ -130,13 +128,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         edits.value = emptyList()
     }
 
-    /** Measures the loaded model's decode speed; ignored while one runs or a reply is generating. */
+    /**
+     * Measures the loaded model on the CPU and NPU and keeps the NPU on only where it wins; ignored
+     * while one runs or a reply is generating.
+     */
     fun runBenchmark() {
         if (_benchmarking.value || engine.state.value == EngineState.Generating) return
         _benchmarking.value = true
         viewModelScope.launch {
             try {
-                _benchmark.value = describe(withContext(Dispatchers.IO) { engine.benchmark() })
+                graph.npuPick.run()?.let { _benchmark.value = describe(it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -151,10 +152,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         val cpu = "CPU ${tokPerSec(result.cpuTokPerSec)}"
         val npu = result.npuTokPerSec?.let { "NPU ${tokPerSec(it)}" } ?: result.npuNote
         val speeds = if (npu == null) cpu else "$cpu · $npu"
-        return listOfNotNull(speeds, result.verdict, result.npuReport).joinToString("\n\n")
+        val prefill = listOfNotNull(
+            result.cpuPrefillTokPerSec?.let { "CPU ${tokPerSec(it)}" },
+            result.npuPrefillTokPerSec?.let { "NPU ${tokPerSec(it)}" },
+        ).takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "Prompt reading: ")
+        val battery = listOfNotNull(
+            result.cpuMahPerReply?.let { "CPU ${mah(it)}" },
+            result.npuMahPerReply?.let { "NPU ${mah(it)}" },
+        ).takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "Battery per reply: ")
+        val pick = when {
+            !npuAvailable -> null
+            result.npuWins -> "Using the NPU: it wins on this model."
+            else -> "Using the CPU: the NPU does not win on this model."
+        }
+        val numbers = listOfNotNull("Reply speed: $speeds", prefill, battery).joinToString("\n")
+        return listOfNotNull(numbers, result.verdict, pick, result.npuReport).joinToString("\n\n")
     }
 
     private fun tokPerSec(value: Double) = String.format(Locale.ROOT, "%.1f tok/s", value)
+
+    private fun mah(value: Double) = String.format(Locale.ROOT, "%.2f mAh", value)
 
     private companion object {
         const val SAVE_SETTLE_MS = 1_000L

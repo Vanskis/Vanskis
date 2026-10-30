@@ -304,7 +304,7 @@ fun SettingsScreen(
                 if (benchmarking) {
                     "Running…"
                 } else {
-                    benchmark ?: "Decode speed of the loaded model on the CPU and, in builds that have it, the NPU."
+                    benchmark ?: "Speed and battery use of the loaded model on the CPU and, in builds that have it, the NPU. The NPU is kept on only where it wins."
                 },
                 style = MaterialTheme.typography.bodySmall,
             )

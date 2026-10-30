@@ -64,9 +64,10 @@ interface Engine {
     /**
      * Decode speed of the loaded model on each accelerator: a short fixed prompt and 32 generated
      * tokens on the CPU, then on the NPU when [npuAvailable]. Reloads the model as needed and leaves it
-     * loaded as it was. Throws [EngineException] without a loaded model.
+     * loaded as it was. Throws [EngineException] without a loaded model. [chargeMicroAh] reads the
+     * battery's remaining charge (null when the phone does not report it), sampled around each run.
      */
-    suspend fun benchmark(): BenchResult =
+    suspend fun benchmark(chargeMicroAh: () -> Long? = { null }): BenchResult =
         throw UnsupportedOperationException("benchmark is not implemented by ${javaClass.simpleName}")
 }
 
@@ -82,7 +83,7 @@ data class EngineConfig(
     val accelerator: Accelerator = Accelerator.CPU,
 )
 
-/** Decode tokens per second from [Engine.benchmark]. */
+/** Decode (and prefill) tokens per second and battery use per reply from [Engine.benchmark]. */
 data class BenchResult(
     val cpuTokPerSec: Double,
     /** Null when the NPU was not available or could not run the model; [npuNote] says why. */
@@ -90,7 +91,42 @@ data class BenchResult(
     val npuNote: String? = null,
     /** Where the NPU run's layers and ops actually ran, when it was traced. */
     val npuReport: String? = null,
+    val cpuPrefillTokPerSec: Double? = null,
+    val npuPrefillTokPerSec: Double? = null,
+    /** Battery charge the bench reply used, in mAh; null when the phone did not report it or it did not move. */
+    val cpuMahPerReply: Double? = null,
+    val npuMahPerReply: Double? = null,
 ) {
+    /**
+     * Whether the NPU wins and should be used: it must run, decode faster (or prefill faster without
+     * decoding slower), and not use clearly more battery per reply when both were measured.
+     */
+    val npuWins: Boolean
+        get() {
+            val npu = npuTokPerSec ?: return false
+            if (cpuTokPerSec <= 0.0) return npu > 0.0
+            val decode = npu / cpuTokPerSec
+            val prefill = ratio(npuPrefillTokPerSec, cpuPrefillTokPerSec)
+            val faster = decode >= FASTER || (prefill != null && prefill >= FASTER && decode > SLOWER)
+            val drain = ratio(npuMahPerReply, cpuMahPerReply)
+            return faster && (drain == null || drain <= MORE_DRAIN)
+        }
+
+    companion object {
+        /** mAh used between two charge-counter readings in µAh; null when either is missing or it did not drop. */
+        fun drainMah(beforeMicroAh: Long?, afterMicroAh: Long?): Double? {
+            if (beforeMicroAh == null || afterMicroAh == null || afterMicroAh >= beforeMicroAh) return null
+            return (beforeMicroAh - afterMicroAh) / 1000.0
+        }
+
+        /** Within about 15% either way is run-to-run noise, not a speed-up. */
+        private const val FASTER = 1.15
+        private const val SLOWER = 0.87
+        private const val MORE_DRAIN = 1.15
+    }
+
+    private fun ratio(npu: Double?, cpu: Double?) = if (npu == null || cpu == null || cpu <= 0.0) null else npu / cpu
+
     /** Plainly, whether the NPU speeds the model up; null when it did not run. */
     val verdict: String?
         get() {
@@ -103,12 +139,6 @@ data class BenchResult(
                 else -> "About the same: the NPU is not speeding this model up."
             }
         }
-
-    private companion object {
-        /** Within about 15% either way is run-to-run noise, not a speed-up. */
-        const val FASTER = 1.15
-        const val SLOWER = 0.87
-    }
 }
 
 data class GenerationParams(

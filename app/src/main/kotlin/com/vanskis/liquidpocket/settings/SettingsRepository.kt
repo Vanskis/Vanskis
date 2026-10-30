@@ -154,6 +154,15 @@ class SettingsRepository(context: Context) {
         store.edit { it[USE_NPU] = value }
     }
 
+    /** Whether the one quiet benchmark after the first model load has run (or started). */
+    val npuBenchmarked: Flow<Boolean> = store.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[NPU_BENCHMARKED] ?: false }
+
+    suspend fun setNpuBenchmarked() {
+        store.edit { it[NPU_BENCHMARKED] = true }
+    }
+
     suspend fun setLiveVoiceModel(value: LiveVoiceModel) {
         store.edit { it[LIVE_VOICE_MODEL] = value.name }
     }
@@ -176,6 +185,7 @@ class SettingsRepository(context: Context) {
         val THINK = booleanPreferencesKey("think")
         val THINK_BUDGET = intPreferencesKey("think_budget")
         val USE_NPU = booleanPreferencesKey("use_npu")
+        val NPU_BENCHMARKED = booleanPreferencesKey("npu_benchmarked")
         val LIVE_VOICE_MODEL = stringPreferencesKey("live_voice_model")
     }
 }

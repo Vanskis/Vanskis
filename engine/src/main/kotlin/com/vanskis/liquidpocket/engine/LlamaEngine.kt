@@ -162,16 +162,20 @@ internal class LlamaEngine(
         }
     }
 
-    override suspend fun benchmark(): BenchResult {
+    override suspend fun benchmark(chargeMicroAh: () -> Long?): BenchResult {
         val (start, config) = current() ?: throw EngineException("No model loaded")
         val statsBefore = _lastStats.value
         var traced = false
         try {
-            val cpu = benchOn(Accelerator.CPU, start.modelPath, config).first ?: 0.0
-            if (!npuAvailable) return BenchResult(cpu, null, NO_NPU_BUILD)
+            val cpu = benchOn(Accelerator.CPU, start.modelPath, config, chargeMicroAh = chargeMicroAh)
+            if (!npuAvailable) return BenchResult(cpu.decode ?: 0.0, null, NO_NPU_BUILD, cpuPrefillTokPerSec = cpu.prefill, cpuMahPerReply = cpu.mah)
             traced = true
-            val (npu, npuNote) = benchOn(Accelerator.NPU, start.modelPath, config, trace = true)
-            return BenchResult(cpu, npu, npuNote, npuReport = report)
+            val npu = benchOn(Accelerator.NPU, start.modelPath, config, trace = true, chargeMicroAh = chargeMicroAh)
+            return BenchResult(
+                cpu.decode ?: 0.0, npu.decode, npu.note, npuReport = report,
+                cpuPrefillTokPerSec = cpu.prefill, npuPrefillTokPerSec = npu.prefill,
+                cpuMahPerReply = cpu.mah, npuMahPerReply = npu.mah,
+            )
         } finally {
             withContext(NonCancellable) {
                 // Leave the model loaded the way the user asked for, untraced, and their last reply's stats.
@@ -181,8 +185,11 @@ internal class LlamaEngine(
         }
     }
 
+    /** One bench reply's speeds and battery use; [note] says why the model could not run there. */
+    private class BenchRun(val decode: Double?, val prefill: Double?, val mah: Double?, val note: String? = null)
+
     /**
-     * Decode tokens/s of the bench reply on [acc], or null and why when the model could not run there.
+     * Speeds and battery use of the bench reply on [acc], or why the model could not run there.
      * With [trace], the model is reloaded with op tracing on and [report] holds what the trace found.
      */
     private suspend fun benchOn(
@@ -190,7 +197,8 @@ internal class LlamaEngine(
         modelPath: String,
         config: EngineConfig,
         trace: Boolean = false,
-    ): Pair<Double?, String?> {
+        chargeMicroAh: () -> Long? = { null },
+    ): BenchRun {
         report = null
         if (trace) {
             withContext(dispatcher) { LlamaNative.nativeSetOpTrace(true) }
@@ -203,10 +211,13 @@ internal class LlamaEngine(
             load(modelPath, config.copy(accelerator = acc))
         }
         val ready = current()?.first ?: throw EngineException("No model loaded")
-        if (ready.accelerator != acc) return null to ready.acceleratorNote
+        if (ready.accelerator != acc) return BenchRun(null, null, null, ready.acceleratorNote)
+        val before = chargeMicroAh()
         chat(BENCH_PROMPT, BENCH_PARAMS).collect {}
+        val after = chargeMicroAh()
         if (trace) report = mutex.withLock { withContext(dispatcher) { LlamaNative.nativeAcceleratorReport() } }
-        return _lastStats.value?.decodeTokensPerSecond to null
+        val stats = _lastStats.value
+        return BenchRun(stats?.decodeTokensPerSecond, stats?.prefillTokensPerSecond, BenchResult.drainMah(before, after))
     }
 
     /** What the last traced benchmark run found; see [LlamaNative.nativeAcceleratorReport]. */
