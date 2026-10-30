@@ -13,7 +13,13 @@ import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.access.LaunchRequest
+import com.vanskis.liquidpocket.access.SharedDocument
+import com.vanskis.liquidpocket.access.SharedInbox
 import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.docs.DocumentText
+import com.vanskis.liquidpocket.docs.ExtractedDocument
+import com.vanskis.liquidpocket.docs.ExtractionProgress
+import com.vanskis.liquidpocket.docs.MlKitOcr
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.EngineState
@@ -28,9 +34,12 @@ import com.vanskis.liquidpocket.tools.PermissionGate
 import com.vanskis.liquidpocket.tools.WebTools
 import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
+import com.vanskis.liquidpocket.ui.components.DocumentExtraction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -42,6 +51,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -95,7 +105,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     }
 
     private val controller = ChatController(
-        graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink, models = models,
+        graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media,
+        documents = DocumentLoader(graph.documents::load), sink = sink, models = models,
         customInstructions = { settings.value.customInstructions },
         accelerator = { if (settings.value.useNpu) Accelerator.NPU else Accelerator.CPU },
     )
@@ -124,7 +135,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     private val _pending = MutableStateFlow<List<Attachment>>(emptyList())
 
-    /** Photos and voice messages waiting to go with the next message. */
+    /** Photos, voice messages and documents waiting to go with the next message. */
     val pending: StateFlow<List<Attachment>> = _pending.asStateFlow()
 
     private enum class Mic { IDLE, RECORDING, LISTENING, SAVING }
@@ -279,7 +290,82 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     fun removePending(item: Attachment) {
         _pending.update { it - item }
-        viewModelScope.launch(Dispatchers.IO) { files.delete(item.path) }
+        viewModelScope.launch(Dispatchers.IO) {
+            // A document's path is its DocumentStore id, not a file.
+            if (item.kind == AttachmentKind.DOCUMENT) graph.documents.delete(item.path) else files.delete(item.path)
+        }
+    }
+
+    private val _extracting = MutableStateFlow<List<DocumentExtraction>>(emptyList())
+
+    /** Documents being read before they are attached, each with its progress. */
+    val extracting: StateFlow<List<DocumentExtraction>> = _extracting.asStateFlow()
+
+    private val extractions = mutableMapOf<Long, Job>()
+    private var nextExtraction = 0L
+
+    /** Reads a PDF or text file from the picker and attaches its text. */
+    fun attachDocument(uri: Uri) = extractDocument(name = null) { reader, progress -> reader.extract(uri, onProgress = progress) }
+
+    /** Reads a document shared from another app and attaches its text; the shared copy is deleted once read. */
+    fun useSharedDocument(document: SharedDocument) {
+        SharedInbox.remove(document)
+        val file = File(document.path)
+        extractDocument(document.name, cleanup = { file.delete() }) { reader, progress ->
+            reader.extract(file, document.mime, document.name, progress)
+        }
+    }
+
+    /** Stops reading the document [key]; nothing is attached. */
+    fun cancelExtraction(key: Long) {
+        extractions[key]?.cancel()
+    }
+
+    /**
+     * Reads a document with [read] while its chip shows the progress, saves the text and adds it to the
+     * pending attachments. [cleanup] runs (blocking, on IO) when reading ends, however it ends.
+     */
+    private fun extractDocument(
+        name: String?,
+        cleanup: () -> Unit = {},
+        read: suspend (DocumentText, (ExtractionProgress) -> Unit) -> ExtractedDocument,
+    ) {
+        val key = nextExtraction++
+        _extracting.update { it + DocumentExtraction(key, name) }
+        // Registered before it starts, so its own finally always finds and removes it.
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val doc = MlKitOcr().use { ocr ->
+                    read(DocumentText(graph, ocr)) { p ->
+                        val ocrStage = p.stage == ExtractionProgress.Stage.OCR
+                        _extracting.update { list ->
+                            list.map { if (it.key == key) it.copy(ocr = ocrStage, done = p.done, total = p.total) else it }
+                        }
+                    }
+                }
+                if (doc.pages.all { it.isBlank() }) {
+                    controller.showError("Could not attach ${doc.name}: no text was found in it.")
+                    return@launch
+                }
+                // Not cancellable, so a cancel during the save deletes the file below instead of losing its id.
+                val id = withContext(NonCancellable + Dispatchers.IO) { graph.documents.save(doc) }
+                if (isActive) {
+                    _pending.update { it + Attachment(id, AttachmentKind.DOCUMENT, doc.name) }
+                } else {
+                    withContext(NonCancellable + Dispatchers.IO) { graph.documents.delete(id) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                controller.showError("Could not attach the document: ${e.message ?: e.javaClass.simpleName}")
+            } finally {
+                extractions.remove(key)
+                _extracting.update { list -> list.filterNot { it.key == key } }
+                withContext(NonCancellable + Dispatchers.IO) { cleanup() }
+            }
+        }
+        extractions[key] = job
+        job.start()
     }
 
     private fun attach(kind: AttachmentKind, failure: String, load: () -> File) {
