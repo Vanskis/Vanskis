@@ -335,7 +335,8 @@ private fun MessageList(
                 val confirmation = state.confirmation
                 when {
                     turn != null && turn.summary -> SummaryDivider(turn.text)
-                    turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
+                    // The photos show under the look_at_photos line before it.
+                    turn != null && turn.fromTool -> Unit
                     // A reply that only called tools: its tool turns that follow show what happened.
                     // (One that offered choices still shows them.)
                     turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() &&

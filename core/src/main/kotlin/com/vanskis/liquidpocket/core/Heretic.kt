@@ -25,6 +25,14 @@ object Heretic {
         )
     }
 
+    /**
+     * A known Heretic GGUF repo for [base], offered in Settings; null where none is known. The 1.7B one
+     * is made with Heretic and ships Q4_K_M. No Heretic build of Omni existed when this was written.
+     */
+    fun suggested(base: ModelSpec): String? = SUGGESTED[base.id]
+
+    private val SUGGESTED = mapOf(ModelCatalog.LFM3_1_7B.id to "OpenIntelligenceNet/LFM3-1.7B-Uncensored-Extreme-GGUF")
+
     /** The Heretic build when [use] is on and [repo] is valid, else [base]. */
     fun chosen(base: ModelSpec, use: Boolean, repo: String): ModelSpec =
         if (use && isRepo(repo)) spec(base, repo) else base

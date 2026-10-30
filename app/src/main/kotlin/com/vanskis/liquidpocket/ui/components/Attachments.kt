@@ -52,10 +52,19 @@ import java.util.Locale
 
 /** Draws an attached image file, cropped to fill [Modifier]. The Android screen decodes; elsewhere a placeholder. */
 val LocalImageThumbnail = staticCompositionLocalOf<@Composable (path: String, modifier: Modifier) -> Unit> {
-    { _, modifier ->
-        Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
-            Icon(AppIcons.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    { _, modifier -> ImagePlaceholder(modifier) }
+}
+
+/** Draws a gallery photo by its content URI, cropped to fill [Modifier]. The Android screen decodes; elsewhere a placeholder. */
+val LocalGalleryThumbnail = staticCompositionLocalOf<@Composable (uri: String, modifier: Modifier) -> Unit> {
+    { _, modifier -> ImagePlaceholder(modifier) }
+}
+
+/** An image icon on a muted fill, for a photo that is not (or cannot be) decoded. */
+@Composable
+fun ImagePlaceholder(modifier: Modifier) {
+    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+        Icon(AppIcons.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

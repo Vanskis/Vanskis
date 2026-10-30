@@ -345,6 +345,7 @@ private fun HereticChoice(vm: SettingsViewModel, base: ModelSpec, use: Boolean, 
         },
         onAction = { if (status.active) vm.cancelDownload(spec) else vm.download(spec) },
         modifier = Modifier.padding(top = 8.dp),
+        suggested = Heretic.suggested(base),
     )
 }
 

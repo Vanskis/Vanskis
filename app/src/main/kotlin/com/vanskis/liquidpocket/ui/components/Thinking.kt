@@ -10,18 +10,13 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -40,6 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -113,9 +111,17 @@ fun ThinkingSection(
             )
         }
         AnimatedVisibility(visible = expanded, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-            Row(modifier = Modifier.height(IntrinsicSize.Min).padding(start = 8.dp, top = 4.dp, bottom = 8.dp)) {
-                Box(Modifier.width(2.dp).fillMaxHeight().background(colors.outlineVariant, RoundedCornerShape(1.dp)))
-                SelectionContainer(modifier = Modifier.padding(start = 12.dp)) {
+            // The bar is drawn rather than sized by intrinsics: the Markdown below cannot be asked for those.
+            val bar = colors.outlineVariant
+            Box(
+                Modifier
+                    .padding(start = 8.dp, top = 4.dp, bottom = 8.dp)
+                    .drawBehind {
+                        val width = 2.dp.toPx()
+                        drawRoundRect(bar, size = Size(width, size.height), cornerRadius = CornerRadius(width / 2))
+                    },
+            ) {
+                SelectionContainer(modifier = Modifier.padding(start = 14.dp)) {
                     // Markdown and math like the reply, smaller and muted, fading in while it streams.
                     val type = MaterialTheme.typography
                     MaterialTheme(colorScheme = colors.copy(onSurface = colors.onSurfaceVariant), typography = type.copy(bodyLarge = type.bodyMedium)) {

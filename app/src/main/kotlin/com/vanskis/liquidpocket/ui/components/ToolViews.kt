@@ -29,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.chat.ToolConfirmation
+import com.vanskis.liquidpocket.tools.PhotoResults
 import com.vanskis.liquidpocket.tools.ToolResults
 import com.vanskis.liquidpocket.tools.WebSearchResult
 import com.vanskis.liquidpocket.tools.WebTools
@@ -106,6 +108,11 @@ fun ToolMessage(toolName: String?, text: String, modifier: Modifier = Modifier) 
         }
     }
     val label = toolLabel(toolName) + if (ToolResults.isDeclined(text)) " · declined" else ""
+    val photos = remember(toolName, text) { if (toolName == PhotoResults.LOOK_TOOL) PhotoResults.shownIds(text) else emptyList() }
+    if (photos.isNotEmpty()) {
+        PhotoStrip(label, photos, modifier)
+        return
+    }
     ToolNote(label, modifier, onClick = { expanded = !expanded }, expanded = expanded) {
         SelectionContainer {
             Text(
@@ -143,15 +150,26 @@ private fun WebSearchNote(search: WebSearchResult.Summary, expanded: Boolean, on
     }
 }
 
-/** The photos a tool showed the model (a turn the app sent for it). */
+/** The photos the model looked at, as thumbnails under the tool's line; tapping one opens it in the gallery. */
 @Composable
-fun ToolPhotosMessage(count: Int, modifier: Modifier = Modifier) {
-    val label = when (count) {
-        0 -> "Showed photos to the model"
-        1 -> "Showed 1 photo to the model"
-        else -> "Showed $count photos to the model"
+private fun PhotoStrip(label: String, ids: List<Long>, modifier: Modifier) {
+    val uriHandler = LocalUriHandler.current
+    val thumbnail = LocalGalleryThumbnail.current
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ToolNote(label)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ids.forEach { id ->
+                val uri = PhotoResults.uri(id)
+                thumbnail(
+                    uri,
+                    Modifier
+                        .size(if (ids.size == 1) 200.dp else 112.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(onClickLabel = "Open photo") { runCatching { uriHandler.openUri(uri) } },
+                )
+            }
+        }
     }
-    ToolNote(label, modifier)
 }
 
 @Composable

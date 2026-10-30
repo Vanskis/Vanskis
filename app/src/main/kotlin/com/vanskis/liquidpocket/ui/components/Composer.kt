@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.FilterChip
@@ -39,6 +40,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.access.SharedDocument
@@ -201,15 +204,39 @@ fun Composer(
     }
 }
 
-/** "Think": whether replies reason before answering. */
+/**
+ * "Think": whether replies reason before answering. On is filled in the accent color with a check;
+ * off is an outline in muted text, so the two cannot be mistaken in any theme.
+ */
 @Composable
 private fun ThinkChip(think: Boolean, onToggle: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
     FilterChip(
         selected = think,
         onClick = onToggle,
-        label = { Text("Think") },
-        leadingIcon = { Icon(AppIcons.Lightbulb, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) },
-        modifier = Modifier.padding(end = 4.dp),
+        label = { Text(if (think) "Think on" else "Think") },
+        leadingIcon = {
+            Icon(
+                if (think) Icons.Filled.Check else AppIcons.Lightbulb,
+                contentDescription = null,
+                modifier = Modifier.size(FilterChipDefaults.IconSize),
+            )
+        },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = Color.Transparent,
+            labelColor = colors.onSurfaceVariant.copy(alpha = 0.8f),
+            iconColor = colors.onSurfaceVariant.copy(alpha = 0.8f),
+            selectedContainerColor = colors.primary,
+            selectedLabelColor = colors.onPrimary,
+            selectedLeadingIconColor = colors.onPrimary,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = think,
+            borderColor = colors.outline,
+            selectedBorderColor = Color.Transparent,
+        ),
+        modifier = Modifier.padding(end = 4.dp).semantics { stateDescription = if (think) "On" else "Off" },
     )
 }
 

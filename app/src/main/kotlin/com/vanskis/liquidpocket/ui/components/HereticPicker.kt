@@ -12,6 +12,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +22,7 @@ import androidx.compose.ui.unit.dp
 /**
  * Standard or Heretic for one model. Heretic takes a Hugging Face GGUF repo the user enters;
  * [status] and [action] describe its download (null hides them), and [onAction] runs the action.
+ * [suggested] is a known repo for this model: picking Heretic with no repo fills it in.
  */
 @Composable
 fun HereticPicker(
@@ -33,13 +35,14 @@ fun HereticPicker(
     action: String?,
     onAction: () -> Unit,
     modifier: Modifier = Modifier,
+    suggested: String? = null,
 ) {
     Column(modifier = modifier) {
         Text(model, style = MaterialTheme.typography.titleMedium)
         Column(modifier = Modifier.selectableGroup()) {
             Choice("Standard", "The official build from Liquid AI.", !heretic) { onChange(false, repo) }
             Choice("Heretic", "A build with refusals removed, from a Hugging Face GGUF repo you choose.", heretic) {
-                onChange(true, repo)
+                onChange(true, repo.ifEmpty { suggested.orEmpty() })
             }
         }
         if (!heretic) return@Column
@@ -47,7 +50,7 @@ fun HereticPicker(
             value = repo,
             onValueChange = { onChange(true, it.trim()) },
             label = { Text("Hugging Face repo") },
-            placeholder = { Text("e.g. your-name/$model-heretic-GGUF") },
+            placeholder = { Text(suggested ?: "e.g. your-name/$model-heretic-GGUF") },
             singleLine = true,
             isError = repo.isNotEmpty() && !repoValid,
             supportingText = {
@@ -61,6 +64,9 @@ fun HereticPicker(
             },
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         )
+        if (suggested != null && repo != suggested) {
+            TextButton(onClick = { onChange(true, suggested) }) { Text("Use suggested: $suggested") }
+        }
         if (status != null || action != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 status?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)) }

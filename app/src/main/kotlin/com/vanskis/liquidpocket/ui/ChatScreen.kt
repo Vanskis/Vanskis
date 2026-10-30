@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,6 +50,7 @@ import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.media.AndroidMediaLoader
 import com.vanskis.liquidpocket.ui.components.ChatLayout
 import com.vanskis.liquidpocket.ui.components.ChatMediaUi
+import com.vanskis.liquidpocket.ui.components.LocalGalleryThumbnail
 import com.vanskis.liquidpocket.ui.components.LocalImageThumbnail
 import com.vanskis.liquidpocket.ui.components.LocalMathRenderer
 import kotlinx.coroutines.Dispatchers
@@ -206,8 +208,15 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val thumbnail = remember(placeholder) {
         @Composable { path: String, modifier: Modifier -> ImageThumbnail(path, modifier, placeholder) }
     }
+    val gallery = remember(placeholder) {
+        @Composable { uri: String, modifier: Modifier -> GalleryThumbnail(uri, modifier, placeholder) }
+    }
     val math = remember { JLatexMathRenderer(context) }
-    CompositionLocalProvider(LocalImageThumbnail provides thumbnail, LocalMathRenderer provides math) {
+    CompositionLocalProvider(
+        LocalImageThumbnail provides thumbnail,
+        LocalGalleryThumbnail provides gallery,
+        LocalMathRenderer provides math,
+    ) {
         ChatLayout(
             state = state,
             status = status,
@@ -235,6 +244,34 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             contextTotal = contextTotal,
             onCompact = vm::compact,
         )
+    }
+}
+
+/** The gallery photo at content [uri], from the system's thumbnail cache; [placeholder] if it cannot be read. */
+@Composable
+private fun GalleryThumbnail(
+    uri: String,
+    modifier: Modifier,
+    placeholder: @Composable (path: String, modifier: Modifier) -> Unit,
+) {
+    val resolver = LocalContext.current.contentResolver
+    val decoded by produceState<Result<ImageBitmap>?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                resolver.loadThumbnail(Uri.parse(uri), android.util.Size(THUMBNAIL_SIDE, THUMBNAIL_SIDE), null).asImageBitmap()
+            }
+        }
+    }
+    val result = decoded
+    when {
+        result == null -> Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
+        result.isSuccess -> Image(
+            bitmap = result.getOrThrow(),
+            contentDescription = "Photo the model looked at",
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+        else -> placeholder(uri, modifier)
     }
 }
 

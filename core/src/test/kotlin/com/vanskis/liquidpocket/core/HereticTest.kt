@@ -38,4 +38,10 @@ class HereticTest {
         assertNull(Heretic.byId(spec.id, "a/c"))
         assertNull(Heretic.byId(spec.id, null))
     }
+
+    @Test
+    fun `the suggested repo is a valid repo for the 1_7B and none for Omni`() {
+        assertTrue(Heretic.isRepo(Heretic.suggested(base)!!))
+        assertNull(Heretic.suggested(ModelCatalog.LFM3_OMNI_2B))
+    }
 }
