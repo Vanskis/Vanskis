@@ -25,6 +25,16 @@ endif()
 set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
 
+# NPU (Hexagon) variant: engine/build.gradle.kts passes -DLP_HEXAGON=ON -DHEXAGON_SDK_ROOT=... for
+# `-PlpHexagon` builds only. The public build leaves it off.
+option(LP_HEXAGON "Build the opt-in Hexagon NPU backend and its DSP skels" OFF)
+if(LP_HEXAGON)
+    if(NOT HEXAGON_SDK_ROOT)
+        message(FATAL_ERROR "LP_HEXAGON needs HEXAGON_SDK_ROOT (the unpacked Hexagon SDK)")
+    endif()
+    set(GGML_HEXAGON ON CACHE BOOL "" FORCE)
+endif()
+
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
@@ -51,3 +61,28 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         mtmd
         android
         log)
+
+if(LP_HEXAGON)
+    # ggml_backend_load_all_from_path() loads every libggml-<backend>.so it finds, and registering
+    # the Hexagon backend starts the DSP and makes it the default offload device. Under another
+    # name it is loaded only by nativeInitNpu (ggml_backend_load) when the user picks the NPU.
+    # The name must match NPU_LIB in lpengine.cpp and LlamaEngine.kt.
+    set_target_properties(ggml-hexagon PROPERTIES OUTPUT_NAME lp-hexagon)
+
+    # The DSP opens its skel as file:///libggml-htp-v<arch>.so from ADSP_LIBRARY_PATH, so the skels
+    # (built by the htp-v* ExternalProjects into ggml-hexagon's binary dir) go next to the other
+    # native libraries (liblpengine.so lives in the CMAKE_LIBRARY_OUTPUT_DIRECTORY Gradle packages),
+    # which end up in nativeLibraryDir.
+    set(LP_HTP_ARCHS v73 v75 v79 v81 v85)
+    get_target_property(LP_HEXAGON_BIN ggml-hexagon BINARY_DIR)
+    set(LP_HTP_SKELS)
+    foreach(V IN LISTS LP_HTP_ARCHS)
+        add_dependencies(${CMAKE_PROJECT_NAME} htp-${V})
+        list(APPEND LP_HTP_SKELS ${LP_HEXAGON_BIN}/libggml-htp-${V}.so)
+    endforeach()
+    add_dependencies(${CMAKE_PROJECT_NAME} ggml-hexagon)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LP_HTP_SKELS} $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
+            COMMENT "Copying the Hexagon HTP skels next to the native libraries"
+            VERBATIM)
+endif()

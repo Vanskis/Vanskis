@@ -31,10 +31,17 @@ internal object LlamaNative {
     external fun nativeInit(nativeLibDir: String)
 
     /**
-     * Loads a model and its multimodal projector [mmprojPath] (null for none), replacing any loaded
-     * one. Returns the context size actually allocated.
+     * Loads the NPU (Hexagon) backend from [nativeLibDir], after [nativeInit]. Returns null when it
+     * is ready, otherwise why the NPU cannot be used. Does not throw.
      */
-    external fun nativeLoad(modelPath: String, mmprojPath: String?, contextSize: Int, threads: Int): Int
+    external fun nativeInitNpu(nativeLibDir: String): String?
+
+    /**
+     * Loads a model and its multimodal projector [mmprojPath] (null for none), replacing any loaded
+     * one, with every layer on the NPU when [npu] (after a successful [nativeInitNpu]), else on the
+     * CPU only. Returns the context size actually allocated.
+     */
+    external fun nativeLoad(modelPath: String, mmprojPath: String?, contextSize: Int, threads: Int, npu: Boolean): Int
 
     /**
      * `[vision, audioIn, audioInSampleRate, audioOut, audioOutSampleRate]` of the loaded projector

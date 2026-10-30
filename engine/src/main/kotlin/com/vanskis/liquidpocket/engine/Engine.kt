@@ -47,13 +47,40 @@ interface Engine {
      */
     suspend fun countTokens(messages: List<ChatMessage>, params: GenerationParams = GenerationParams()): Int =
         throw UnsupportedOperationException("countTokens is not implemented by ${javaClass.simpleName}")
+
+    /**
+     * Whether this build ships the NPU backend, so [Accelerator.NPU] can be tried. The phone may still
+     * lack a usable NPU: [load] then falls back to the CPU and says why in [EngineState.Ready.acceleratorNote].
+     */
+    val npuAvailable: Boolean get() = false
+
+    /**
+     * Decode speed of the loaded model on each accelerator: a short fixed prompt and 32 generated
+     * tokens on the CPU, then on the NPU when [npuAvailable]. Reloads the model as needed and leaves it
+     * loaded as it was. Throws [EngineException] without a loaded model.
+     */
+    suspend fun benchmark(): BenchResult =
+        throw UnsupportedOperationException("benchmark is not implemented by ${javaClass.simpleName}")
 }
+
+/** Where the model's layers run. */
+enum class Accelerator { CPU, NPU }
 
 data class EngineConfig(
     /** Clamped by the engine to the model's trained context and to 2048..32768. */
     val contextSize: Int = 8192,
     /** The multimodal projector (vision, audio in, speech out) that goes with the model, if any. */
     val mmprojPath: String? = null,
+    /** Requested accelerator; [Accelerator.NPU] falls back to the CPU when it cannot be used. */
+    val accelerator: Accelerator = Accelerator.CPU,
+)
+
+/** Decode tokens per second from [Engine.benchmark]. */
+data class BenchResult(
+    val cpuTokPerSec: Double,
+    /** Null when the NPU was not available or could not run the model; [npuNote] says why. */
+    val npuTokPerSec: Double?,
+    val npuNote: String? = null,
 )
 
 data class GenerationParams(
@@ -141,7 +168,14 @@ data class GenerationStats(
 sealed interface EngineState {
     data object Idle : EngineState
     data object Loading : EngineState
-    data class Ready(val modelPath: String, val contextSize: Int) : EngineState
+    data class Ready(
+        val modelPath: String,
+        val contextSize: Int,
+        /** The accelerator the model actually runs on. */
+        val accelerator: Accelerator = Accelerator.CPU,
+        /** Why the requested accelerator is not the one in use (the NPU fell back to the CPU), else null. */
+        val acceleratorNote: String? = null,
+    ) : EngineState
     data object Generating : EngineState
     data class Error(val message: String) : EngineState
 }
