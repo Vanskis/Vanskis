@@ -36,10 +36,12 @@
 //     llama_model_params { ggml_backend_dev_t * devices;   // NULL-terminated; NULL = every device
 //                          int32_t n_gpu_layers; ... }     // default -1: all layers offloaded
 //   ggml/src/ggml-hexagon (NPU builds, built as liblp-hexagon.so)
-//     ggml_backend_hexagon_reg() opens a FastRPC session per device (HTP0 by default) and throws
-//     std::runtime_error when the DSP refuses it (e.g. DSPRPC_CONTROL_UNSIGNED_MODULE); it returns
-//     null when libcdsprpc.so cannot be loaded. The DSP loads file:///libggml-htp-v<arch>.so from
-//     ADSP_LIBRARY_PATH.
+//     ggml_backend_hexagon_reg() returns null when libcdsprpc.so cannot be loaded; it opens no DSP
+//     session. Each device opens its FastRPC session lazily (ggml_backend_hexagon_device_context::
+//     session()), on the first buffer alloc or supports_op, i.e. during llama_model_load_from_file.
+//     A refusal there (e.g. remote_session_control(unsign) failed) throws std::runtime_error, which
+//     llama_model_load catches and logs, so the load returns null. The DSP loads
+//     file:///libggml-htp-v<arch>.so from ADSP_LIBRARY_PATH. Compute errors are GGML_ABORTs.
 //   common/common.h
 //     common_batch(llama_context * ctx); void clear();
 //     int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
@@ -659,6 +661,16 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInit(JNIEnv * env, jobjec
     llama_log_set(lp_android_log_callback, nullptr);
     mtmd_helper_log_set(lp_android_log_callback, nullptr);
     const std::string lib_dir = jstring_to_std(env, jlib_dir);
+    // The DSP opens the skels (libggml-htp-v<arch>.so, next to the NPU backend) from
+    // ADSP_LIBRARY_PATH when the backend opens its sessions. Set here, before llama.cpp starts any
+    // thread of its own: setenv is not safe while other native threads may call getenv.
+    const std::string npu_lib = lib_dir + "/" + NPU_LIB;
+    if (access(npu_lib.c_str(), R_OK) == 0) {
+        const char * prev = getenv("ADSP_LIBRARY_PATH");
+        const std::string adsp = lib_dir + ";" + (prev != nullptr && prev[0] != '\0' ? prev : ADSP_SYSTEM_PATHS);
+        setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
+        LOGi("ADSP_LIBRARY_PATH=%s", adsp.c_str());
+    }
     LOGi("Loading ggml backends from %s", lib_dir.c_str());
     ggml_backend_load_all_from_path(lib_dir.c_str());
     llama_backend_init();
@@ -677,12 +689,8 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInitNpu(JNIEnv * env, job
     if (access(lib.c_str(), R_OK) != 0) {
         reason = "this build has no NPU support";
     } else {
-        // The DSP opens the skels (libggml-htp-v<arch>.so, next to the backend) from here; it is
-        // read when the backend opens its sessions, so it must be set before ggml_backend_load.
-        const char * prev = getenv("ADSP_LIBRARY_PATH");
-        const std::string adsp = lib_dir + ";" + (prev != nullptr && prev[0] != '\0' ? prev : ADSP_SYSTEM_PATHS);
-        setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
-        LOGi("Loading the NPU backend %s (ADSP_LIBRARY_PATH=%s)", lib.c_str(), adsp.c_str());
+        // ADSP_LIBRARY_PATH was set by nativeInit.
+        LOGi("Loading the NPU backend %s", lib.c_str());
         try {
             g_npu_reg = ggml_backend_load(lib.c_str());
             if (g_npu_reg == nullptr) {
@@ -740,13 +748,19 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
     try {
         g_model = llama_model_load_from_file(path.c_str(), mparams);
     } catch (const std::exception & e) {
-        // The NPU backend throws when it cannot allocate or reach the DSP.
         g_model = nullptr;
         throw_java(env, std::string("Could not load model: ") + e.what());
         return 0;
     }
     if (g_model == nullptr) {
-        throw_java(env, "Could not load model (unsupported or corrupt GGUF?): " + path);
+        // llama_model_load catches the NPU backend's errors (the DSP refusing the session, rpcmem or
+        // fastrpc_mmap failures) and only logs them, so on the NPU a null model is most likely the
+        // NPU's doing: say so, and LlamaEngine retries on the CPU, which reports a bad file itself.
+        if (npu) {
+            throw_java(env, "The NPU could not load the model (the DSP refused it or ran out of memory; see the log)");
+        } else {
+            throw_java(env, "Could not load model (unsupported or corrupt GGUF?): " + path);
+        }
         return 0;
     }
     g_vocab = llama_model_get_vocab(g_model);

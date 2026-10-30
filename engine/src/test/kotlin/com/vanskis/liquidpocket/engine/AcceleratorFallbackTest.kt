@@ -50,18 +50,19 @@ class AcceleratorFallbackTest {
 
     @Test
     fun npuInitFailureFallsBackWithItsReason() {
-        val out = run(Accelerator.NPU, initError = "remote_session_control(unsign) failed")
+        // A refused DSP session surfaces at load (npuLoadFailureRetriesOnTheCpu), not here.
+        val out = run(Accelerator.NPU, initError = "the NPU backend did not start (no Hexagon DSP, or libcdsprpc.so is unavailable)")
         assertEquals(Accelerator.CPU, out.accelerator)
-        assertTrue(out.note!!.contains("remote_session_control(unsign) failed"))
+        assertTrue(out.note!!.contains("libcdsprpc.so is unavailable"))
         assertEquals(listOf(Accelerator.CPU), loads)
     }
 
     @Test
     fun npuLoadFailureRetriesOnTheCpu() {
-        val out = run(Accelerator.NPU, npuLoadError = "rpcmem_alloc failed")
+        val out = run(Accelerator.NPU, npuLoadError = "The NPU could not load the model (the DSP refused it or ran out of memory; see the log)")
         assertEquals(Accelerator.CPU, out.accelerator)
         assertEquals("model on CPU", out.value)
-        assertTrue(out.note!!.contains("rpcmem_alloc failed"))
+        assertTrue(out.note!!.contains("The NPU could not load the model"))
         assertEquals(listOf(Accelerator.NPU, Accelerator.CPU), loads)
     }
 
