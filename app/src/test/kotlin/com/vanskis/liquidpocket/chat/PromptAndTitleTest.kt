@@ -29,6 +29,29 @@ class PromptAndTitleTest {
         assertTrue(prompt.length <= SYSTEM_PROMPT.length + SystemPrompt.FACTS_HEADER.length + SystemPrompt.FACTS_BUDGET_CHARS + 3 * fitting + 3)
     }
 
+    @Test fun `custom instructions are appended after the facts`() {
+        assertEquals(
+            "$SYSTEM_PROMPT\n\n${SystemPrompt.FACTS_HEADER}\n- Vegetarian\n\n${SystemPrompt.CUSTOM_HEADER}\nAnswer in French.",
+            SystemPrompt.build(listOf("Vegetarian"), custom = "  Answer in French. "),
+        )
+        assertTrue(SystemPrompt.build(emptyList(), tools = true, custom = "Be brief.").endsWith("\n\n${SystemPrompt.CUSTOM_HEADER}\nBe brief."))
+    }
+
+    @Test fun `blank custom instructions add nothing`() {
+        assertEquals(SYSTEM_PROMPT, SystemPrompt.build(emptyList(), custom = ""))
+        assertEquals(SYSTEM_PROMPT, SystemPrompt.build(emptyList(), custom = " \n\t "))
+    }
+
+    @Test fun `custom instructions are cut at the limit`() {
+        val prompt = SystemPrompt.build(emptyList(), custom = "Q".repeat(SystemPrompt.MAX_CUSTOM_CHARS + 50))
+        assertEquals(SystemPrompt.MAX_CUSTOM_CHARS, prompt.count { it == 'Q' })
+    }
+
+    @Test fun `every preset fits the custom instructions limit`() {
+        assertEquals(listOf("Concise", "Explain like I'm 12", "Friendly", "Formal", "Code helper"), InstructionPresets.ALL.map { it.first })
+        assertTrue(InstructionPresets.ALL.all { it.second.isNotBlank() && it.second.length <= SystemPrompt.MAX_CUSTOM_CHARS })
+    }
+
     @Test fun `a short first message is the title as is, on one line`() {
         assertEquals("Plan a trip to Lisbon", ConversationTitle.from("  Plan a trip\nto   Lisbon "))
         assertEquals(ConversationTitle.UNTITLED, ConversationTitle.from("   "))

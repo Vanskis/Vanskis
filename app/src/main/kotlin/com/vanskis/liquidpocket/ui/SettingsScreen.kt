@@ -3,6 +3,8 @@ package com.vanskis.liquidpocket.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,9 +13,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -24,6 +28,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -33,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
+import com.vanskis.liquidpocket.chat.InstructionPresets
+import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.settings.AppSettings
@@ -40,7 +47,7 @@ import com.vanskis.liquidpocket.settings.SettingsViewModel
 import java.util.Locale
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -52,6 +59,8 @@ fun SettingsScreen(
     // Sliders move locally and persist when released, so dragging does not write on every frame.
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
+
+    var instructions by remember(settings.customInstructions) { mutableStateOf(settings.customInstructions) }
 
     BackHandler(onBack = onBack)
 
@@ -117,6 +126,27 @@ fun SettingsScreen(
                 }
                 Switch(checked = settings.webSearch, onCheckedChange = vm::setWebSearch)
             }
+
+            Text("Custom instructions", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            Text("Added to the system prompt of every new chat.", style = MaterialTheme.typography.bodySmall)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                InstructionPresets.ALL.forEach { (label, text) ->
+                    AssistChip(onClick = { instructions = text; vm.setCustomInstructions(text) }, label = { Text(label) })
+                }
+            }
+            OutlinedTextField(
+                value = instructions,
+                onValueChange = {
+                    instructions = it.take(SystemPrompt.MAX_CUSTOM_CHARS)
+                    vm.setCustomInstructions(instructions)
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                minLines = 3,
+                supportingText = { Text("${instructions.length} / ${SystemPrompt.MAX_CUSTOM_CHARS}") },
+            )
 
             Text("Voice", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

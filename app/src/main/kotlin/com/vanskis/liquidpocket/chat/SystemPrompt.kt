@@ -37,12 +37,34 @@ object SystemPrompt {
         "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
             "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them."
 
-    fun build(facts: List<String>, tools: Boolean = false): String {
+    /** Longest custom instruction text the Settings field accepts. */
+    const val MAX_CUSTOM_CHARS = 1000
+
+    const val CUSTOM_HEADER = "Custom instructions from the user:"
+
+    /**
+     * [custom] is the user's free-text instructions from Settings, added after the facts; blank adds
+     * nothing and anything past [MAX_CUSTOM_CHARS] is cut.
+     */
+    fun build(facts: List<String>, tools: Boolean = false, custom: String = ""): String {
         val base = if (tools) "$SYSTEM_PROMPT\n$TOOLS_LINE" else SYSTEM_PROMPT
         val used = normalize(facts.take(fittingCount(facts)))
-        if (used.isEmpty()) return base
-        return base + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }
+        val withFacts =
+            if (used.isEmpty()) base else base + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }
+        val extra = custom.trim().take(MAX_CUSTOM_CHARS).trim()
+        return if (extra.isEmpty()) withFacts else withFacts + "\n\n" + CUSTOM_HEADER + "\n" + extra
     }
 
     private val WHITESPACE = Regex("\\s+")
+}
+
+/** The preset chips in Settings: each fills the custom instructions field with its text. */
+object InstructionPresets {
+    val ALL: List<Pair<String, String>> = listOf(
+        "Concise" to "Keep answers short and to the point. Skip preambles and don't repeat the question.",
+        "Explain like I'm 12" to "Explain things in simple words a 12-year-old would understand. Use everyday examples and avoid jargon.",
+        "Friendly" to "Be warm, upbeat and conversational, like a friendly helper. Encourage the user and keep the tone light.",
+        "Formal" to "Use a formal, professional tone. Write in complete sentences, with no slang or emoji.",
+        "Code helper" to "Act as a programming assistant. Give working code in fenced code blocks, then a brief explanation of how it works.",
+    )
 }
