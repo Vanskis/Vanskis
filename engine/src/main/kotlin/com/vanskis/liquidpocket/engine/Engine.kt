@@ -193,6 +193,11 @@ data class ChatMessage(
     val toolCalls: List<ToolCall> = emptyList(),
     /** TOOL turns only: the name of the tool whose result [content] is. */
     val toolName: String? = null,
+    /**
+     * ASSISTANT turns only: what the model thought before this turn, handed back while its reply is
+     * still calling tools so it keeps its plan. Templates without a place for it leave it out.
+     */
+    val thinking: String? = null,
 )
 
 /** Packed RGB, 3 bytes per pixel, row-major, [width] * [height] * 3 bytes. Callers downscale first. */

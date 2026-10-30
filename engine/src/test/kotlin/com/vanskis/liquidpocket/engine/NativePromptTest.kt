@@ -24,6 +24,12 @@ class NativePromptTest {
     private fun strings(a: Array<ByteArray>) = a.map { String(it, Charsets.UTF_8) }
 
     @Test
+    fun anAssistantMessagesThinkingLeadsItsContentBetweenMarkers() {
+        val p = NativePrompt.of(listOf(ChatMessage(Role.ASSISTANT, "ok", thinking = "plan\u0002"), ChatMessage(Role.USER, "hi", thinking = "x")), emptyList())
+        assertEquals(listOf("\u0001plan\u0002ok", "hi"), strings(p.contents))
+    }
+
+    @Test
     fun flattensMessagesToolCallsAndTools() {
         val p = NativePrompt.of(conversation, tools)
         assertArrayEquals(intArrayOf(0, 1, 2, 3, 1), p.roles)

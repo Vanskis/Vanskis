@@ -337,10 +337,18 @@ private fun MessageList(
                     turn != null && turn.summary -> SummaryDivider(turn.text)
                     // The photos show under the look_at_photos line before it.
                     turn != null && turn.fromTool -> Unit
-                    // A reply that only called tools: its tool turns that follow show what happened.
-                    // (One that offered choices still shows them.)
+                    // A reply that only called tools: its tool turns that follow show what happened, under
+                    // what it thought first. (One that offered choices still shows them.)
                     turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() &&
-                        Choices.offerIn(turn.toolCalls) == null -> Unit
+                        Choices.offerIn(turn.toolCalls) == null -> if (!turn.thinking.isNullOrBlank()) {
+                        ThinkingSection(
+                            turn.thinking,
+                            turn.thinkingMillis?.let { (it / 1000).toInt() },
+                            streaming = false,
+                            tokens = turn.thinkingTokens,
+                            onCopyCode = onCopy,
+                        )
+                    }
                     turn == null && confirmation != null -> ToolConfirmationCard(confirmation, onApproveTool, onDeclineTool)
                     user != null -> {
                         val newest = idle && index == state.lastUserIndex

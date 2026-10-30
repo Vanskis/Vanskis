@@ -43,6 +43,8 @@ class ToolLoopTest {
         override val lastStats = MutableStateFlow<GenerationStats?>(null)
         val replies = ArrayDeque<Pair<String, List<ToolCall>>>()
         var always: Pair<String, List<ToolCall>>? = null
+        /** Thought before each reply, in order; none once empty. */
+        val thoughts = ArrayDeque<String>()
         val sent = mutableListOf<List<ChatMessage>>()
         val offered = mutableListOf<List<String>>()
 
@@ -54,6 +56,7 @@ class ToolLoopTest {
             sent += messages
             offered += params.tools.map { it.name }
             val (text, calls) = replies.removeFirstOrNull() ?: always ?: ("Done" to emptyList())
+            thoughts.removeFirstOrNull()?.let { emit(ReplyChunk.Thinking(it)) }
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             calls.forEach { emit(ReplyChunk.ToolCall(it)) }
         }
@@ -124,6 +127,22 @@ class ToolLoopTest {
         assertEquals(listOf(Role.USER, Role.ASSISTANT, Role.TOOL, Role.ASSISTANT), s.turns.map { it.role })
         assertEquals("It is 10:00.", s.turns.last().text)
         assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
+    }
+
+    @Test fun `thinking goes back to the model while its reply calls tools, and not after the reply`() = runTest {
+        engine.thoughts += "Check the clock first."
+        engine.replies += "" to listOf(call("get_time"))
+        engine.replies += "It is 10:00." to emptyList()
+        val c = controller()
+        c.send("what time is it?", params)
+        advanceUntilIdle()
+
+        assertEquals("Check the clock first.", engine.sent[1][2].thinking)
+        assertEquals("Check the clock first.", c.state.value.turns[1].thinking)
+
+        c.send("thanks", params)
+        advanceUntilIdle()
+        assertTrue(engine.sent[2].none { it.thinking != null })
     }
 
     @Test fun `a write tool waits for the user's approval before it runs`() = runTest {

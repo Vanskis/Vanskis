@@ -582,6 +582,14 @@ common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers
             for (jint m : media_msg) if (m == static_cast<jint>(i)) markers += marker;
             content = markers + content;
         }
+        // An assistant message's thinking leads its content between \x01 and \x02 (NativePrompt.packed).
+        if (roles[i] == ROLE_ASSISTANT && !content.empty() && content[0] == '\x01') {
+            const size_t end = content.find('\x02');
+            if (end != std::string::npos) {
+                msg.reasoning_content = content.substr(1, end - 1);
+                content.erase(0, end + 1);
+            }
+        }
         msg.content = std::move(content);
         msg.tool_name = tool_names[i];
         auto calls = static_cast<jobjectArray>(env->GetObjectArrayElement(a.tool_calls, static_cast<jsize>(i)));

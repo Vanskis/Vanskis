@@ -24,6 +24,17 @@ internal class NativePrompt private constructor(
     val tools: Array<ByteArray>,
 ) {
     companion object {
+        /** Opens a thinking block at the start of an assistant message's content; [THINKING_END] ends it. */
+        const val THINKING_START = '\u0001'
+        const val THINKING_END = '\u0002'
+
+        /** [message]'s content, led by its thinking between [THINKING_START] and [THINKING_END] for the native side to split off. */
+        fun packed(message: ChatMessage): String {
+            val thinking = message.thinking
+            if (message.role != Role.ASSISTANT || thinking.isNullOrEmpty()) return message.content
+            return "$THINKING_START${thinking.replace(THINKING_END.toString(), "")}$THINKING_END${message.content}"
+        }
+
         /**
          * Flattens [messages] and [tools]. With [placeholders] the media data is left out: the
          * prompt then still counts the right number of tokens but cannot be decoded.
@@ -51,7 +62,7 @@ internal class NativePrompt private constructor(
             }
             return NativePrompt(
                 roles = IntArray(messages.size) { LlamaNative.roleCode(messages[it].role) },
-                contents = Array(messages.size) { utf8(messages[it].content) },
+                contents = Array(messages.size) { utf8(packed(messages[it])) },
                 toolNames = Array(messages.size) { utf8(messages[it].toolName.orEmpty()) },
                 toolCalls = Array(messages.size) { i ->
                     messages[i].toolCalls.flatMap { listOf(utf8(it.name), utf8(it.argumentsJson)) }.toTypedArray()

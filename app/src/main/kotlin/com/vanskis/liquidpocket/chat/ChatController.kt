@@ -422,7 +422,11 @@ class ChatController(
         val caps = engine.capabilities.value
         val turns = _state.value.turns
         // Documents give the passages for the newest question, whichever turn attached them.
-        val question = turns.lastOrNull { it.role == Role.USER && !it.fromTool }?.text.orEmpty()
+        val asked = turns.indexOfLast { it.role == Role.USER && !it.fromTool }
+        val question = turns.getOrNull(asked)?.text.orEmpty()
+        // The reply under way keeps its thinking between tool calls; once it has ended, its thinking goes.
+        val replying = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Turn, Boolean>())
+        if (asked >= 0) replying += turns.subList(asked + 1, turns.size)
         return withContext(work) {
             // Media is decoded once per turn, not again for the count after the reply; documents are
             // read again when the question changes.
@@ -431,7 +435,8 @@ class ChatController(
             val next = java.util.IdentityHashMap<Turn, ChatMessage>()
             val history = Compaction.history(system, turns) { turn ->
                 val reused = previous[turn]?.takeIf { sameQuestion || turn.attachments.none { it.kind == AttachmentKind.DOCUMENT } }
-                (reused ?: turn.toMessage(caps, question)).also { next[turn] = it }
+                val message = (reused ?: turn.toMessage(caps, question)).also { next[turn] = it }
+                if (turn in replying && !turn.thinking.isNullOrBlank()) message.copy(thinking = turn.thinking) else message
             }
             converted = next
             convertedFor = caps
@@ -764,7 +769,7 @@ class ChatController(
      */
     private fun Turn.toMessage(caps: Capabilities, question: String): ChatMessage {
         // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
-        // or as a note to a model that cannot see them (the text model). Thinking is never sent back.
+        // or as a note to a model that cannot see them (the text model). Thinking is added by [history].
         val text = if (role == Role.USER) EnvironmentAnchor.prefixed(context, text) else text
         if (role != Role.USER || attachments.isEmpty()) {
             val unseen = images.isNotEmpty() && !caps.vision
