@@ -70,7 +70,8 @@ fun SettingsScreen(
     val benchmark by vm.benchmark.collectAsStateWithLifecycle()
     val omniInstalled by vm.omniInstalled.collectAsStateWithLifecycle()
     // Sliders move locally and update the draft when released.
-    var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
+    var contextStop by remember(settings.contextSize) { mutableFloatStateOf(ContextSize.nearestOption(settings.contextSize).toFloat()) }
+    val contextSize = ContextSize.OPTIONS[contextStop.roundToInt()]
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
     var thinkStep by remember(settings.thinkBudget) { mutableFloatStateOf(ThinkBudget.STEPS.indexOf(settings.thinkBudget).toFloat()) }
 
@@ -111,21 +112,28 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val step = AppSettings.CONTEXT_STEP
-            Text("Context size: ${contextSize.roundToInt() / step}K tokens", style = MaterialTheme.typography.titleMedium)
+            Text("Context size: ${contextSize / 1024}K tokens", style = MaterialTheme.typography.titleMedium)
             Slider(
-                value = contextSize,
-                onValueChange = { contextSize = ((it / step).roundToInt() * step).toFloat() },
-                valueRange = ContextSize.MIN.toFloat()..ContextSize.MAX.toFloat(),
-                steps = (ContextSize.MAX - ContextSize.MIN) / step - 1,
-                onValueChangeFinished = { vm.setContextSize(contextSize.roundToInt()) },
+                value = contextStop,
+                onValueChange = { contextStop = it.roundToInt().toFloat() },
+                valueRange = 0f..ContextSize.OPTIONS.lastIndex.toFloat(),
+                steps = ContextSize.OPTIONS.size - 2,
+                onValueChangeFinished = { vm.setContextSize(contextSize) },
             )
             // Follows the slider as it moves, before the size is saved.
             Text(
-                "Memory: " + MemoryEstimate.label(ACTIVE_MODEL, contextSize.roundToInt()),
+                "Memory: " + MemoryEstimate.label(ACTIVE_MODEL, contextSize),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
+            if (contextSize > ContextSize.WARN_ABOVE) {
+                Text(
+                    "Above 32K, replies get slower as the conversation grows, and the app may run out of memory and " +
+                        "close. The model never uses more than it was trained for.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Text(
                 "Longer conversations fit in a larger context, at the cost of memory (a rough estimate: the model plus " +
                     "its cache for every token). Changing it reloads the model.",

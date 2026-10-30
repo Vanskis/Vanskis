@@ -45,7 +45,6 @@ data class AppSettings(
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
         const val MAX_TEMPERATURE = 1.5f
-        const val CONTEXT_STEP = 1024
     }
 }
 

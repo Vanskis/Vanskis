@@ -158,7 +158,7 @@ namespace {
 
 // Mirrors com.vanskis.liquidpocket.core.ContextSize.
 constexpr int CTX_MIN = 2048;
-constexpr int CTX_MAX = 32768;
+constexpr int CTX_MAX = 262144;
 constexpr int BATCH_SIZE = 512;
 
 // The Hexagon backend's file name in NPU builds (OUTPUT_NAME in CMakeLists.txt, NPU_LIB in
@@ -831,7 +831,7 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
     }
     g_vocab = llama_model_get_vocab(g_model);
 
-    // Same rule as core's ContextSize.clamp: 2048..32768, then the model's training context.
+    // Same rule as core's ContextSize.clamp: 2048..262144, then the model's training context.
     int n_ctx = std::clamp(static_cast<int>(jn_ctx), CTX_MIN, CTX_MAX);
     const int n_train = llama_model_n_ctx_train(g_model);
     if (n_train > 0) n_ctx = std::min(n_ctx, n_train);

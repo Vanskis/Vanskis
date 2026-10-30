@@ -74,7 +74,7 @@ interface Engine {
 enum class Accelerator { CPU, NPU }
 
 data class EngineConfig(
-    /** Clamped by the engine to the model's trained context and to 2048..32768. */
+    /** Clamped by the engine to the model's trained context and to 2048..262144. */
     val contextSize: Int = 8192,
     /** The multimodal projector (vision, audio in, speech out) that goes with the model, if any. */
     val mmprojPath: String? = null,

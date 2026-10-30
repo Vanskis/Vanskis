@@ -11,11 +11,19 @@ class ContextSizeAndShaTest {
 
     @Test fun clamp() {
         assertEquals(2048, ContextSize.clamp(100))
-        assertEquals(32768, ContextSize.clamp(1_000_000))
+        assertEquals(262144, ContextSize.clamp(1_000_000))
         assertEquals(8192, ContextSize.clamp(8192, trainedCtx = 128_000))
         assertEquals(4096, ContextSize.clamp(8192, trainedCtx = 4096))
         assertEquals(16384, ContextSize.clamp(16384, trainedCtx = 0))
         assertTrue(ContextSize.DEFAULT in ContextSize.OPTIONS)
+    }
+
+    @Test fun optionsRunPastTheWarningToTheMax() {
+        assertEquals(ContextSize.MIN, ContextSize.OPTIONS.first())
+        assertEquals(ContextSize.MAX, ContextSize.OPTIONS.last())
+        assertEquals(ContextSize.OPTIONS.sorted(), ContextSize.OPTIONS)
+        assertEquals(ContextSize.OPTIONS.indexOf(131072), ContextSize.nearestOption(120_000))
+        assertEquals(ContextSize.OPTIONS.indexOf(8192), ContextSize.nearestOption(8192))
     }
 
     @Test fun sha256KnownVector() {

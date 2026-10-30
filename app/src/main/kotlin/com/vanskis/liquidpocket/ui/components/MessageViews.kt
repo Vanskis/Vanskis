@@ -133,7 +133,7 @@ fun AssistantMessage(
         AssistantMark(busy = streaming, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
         Column(modifier = Modifier.weight(1f)) {
             // Still thinking while it streams and no reply text has come yet.
-            ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty(), tokens = thinkingTokens)
+            ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty(), tokens = thinkingTokens, onCopyCode = onCopyCode)
             if (text.isEmpty() && streaming) {
                 if (thinking == null) TypingIndicator(modifier = Modifier.padding(vertical = 8.dp))
             } else if (text.isNotEmpty()) {

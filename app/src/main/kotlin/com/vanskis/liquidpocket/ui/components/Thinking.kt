@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -50,7 +51,14 @@ import kotlinx.coroutines.delay
  * until then a timer counts while [streaming]. [tokens] is how many tokens it has thought.
  */
 @Composable
-fun ThinkingSection(thinking: String?, seconds: Int?, streaming: Boolean, modifier: Modifier = Modifier, tokens: Int? = null) {
+fun ThinkingSection(
+    thinking: String?,
+    seconds: Int?,
+    streaming: Boolean,
+    modifier: Modifier = Modifier,
+    tokens: Int? = null,
+    onCopyCode: (String) -> Unit = {},
+) {
     if (thinking == null) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     // Counts while it thinks and stops when the reply starts, until the turn brings its own time.
@@ -108,7 +116,11 @@ fun ThinkingSection(thinking: String?, seconds: Int?, streaming: Boolean, modifi
             Row(modifier = Modifier.height(IntrinsicSize.Min).padding(start = 8.dp, top = 4.dp, bottom = 8.dp)) {
                 Box(Modifier.width(2.dp).fillMaxHeight().background(colors.outlineVariant, RoundedCornerShape(1.dp)))
                 SelectionContainer(modifier = Modifier.padding(start = 12.dp)) {
-                    Text(thinking, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                    // Markdown and math like the reply, smaller and muted, fading in while it streams.
+                    val type = MaterialTheme.typography
+                    MaterialTheme(colorScheme = colors.copy(onSurface = colors.onSurfaceVariant), typography = type.copy(bodyLarge = type.bodyMedium)) {
+                        MarkdownReply(thinking, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth(), streaming = streaming)
+                    }
                 }
             }
         }
