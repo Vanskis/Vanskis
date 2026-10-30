@@ -46,6 +46,8 @@ data class MessageEntity(
     val toolCallsJson: String? = null,
     /** TOOL turns: the tool whose result [text] is. */
     val toolName: String? = null,
+    /** See [MessageJson.encodeExtras]. Added in database version 3. */
+    val extrasJson: String? = null,
 )
 
 @Entity(tableName = "facts")

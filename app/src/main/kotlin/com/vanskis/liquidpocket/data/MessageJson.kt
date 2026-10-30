@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -35,8 +36,34 @@ object MessageJson {
     fun decodeToolCalls(json: String?): List<ToolCall> =
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
+    /** `{"thinking": "...", "thinkingMillis": 1234}`, a key left out when null. No extras is stored as null. */
+    fun encodeExtras(extras: MessageExtras): String? =
+        if (extras.isEmpty) null else buildJsonObject {
+            extras.thinking?.let { put("thinking", it) }
+            extras.thinkingMillis?.let { put("thinkingMillis", it) }
+        }.toString()
+
+    /** Malformed or unexpected JSON gives no extras; this never throws. */
+    fun decodeExtras(json: String?): MessageExtras {
+        if (json.isNullOrEmpty()) return MessageExtras()
+        return try {
+            val obj = Json.parseToJsonElement(json).jsonObject
+            MessageExtras(
+                thinking = obj["thinking"]?.jsonPrimitive?.takeIf { it.isString }?.content,
+                thinkingMillis = obj["thinkingMillis"]?.jsonPrimitive?.longOrNull,
+            )
+        } catch (_: Exception) {
+            MessageExtras()
+        }
+    }
+
     private fun objects(json: String?): List<JsonObject> =
         if (json.isNullOrEmpty()) emptyList() else Json.parseToJsonElement(json).jsonArray.map { it.jsonObject }
 
     private fun JsonObject.string(key: String): String = getValue(key).jsonPrimitive.content
+}
+
+/** What a saved message keeps beyond its own columns: the reasoning of an assistant reply and how long it took. */
+data class MessageExtras(val thinking: String? = null, val thinkingMillis: Long? = null) {
+    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null
 }
