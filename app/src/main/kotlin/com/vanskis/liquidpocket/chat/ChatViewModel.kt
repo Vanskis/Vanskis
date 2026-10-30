@@ -158,6 +158,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
             temperature = s.temperature,
             // A reply runs until it ends or the context is full; a cut one can be continued.
             maxNewTokens = GenerationParams.UNTIL_CONTEXT_FULL,
+            thinkBudget = s.thinkBudget,
             tools = tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
             speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine),
         )

@@ -53,6 +53,7 @@ import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.SettingsViewModel
+import com.vanskis.liquidpocket.settings.ThinkBudget
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -75,6 +76,7 @@ fun SettingsScreen(
     // Sliders move locally and persist when released, so dragging does not write on every frame.
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
+    var thinkStep by remember(settings.thinkBudget) { mutableFloatStateOf(ThinkBudget.STEPS.indexOf(settings.thinkBudget).toFloat()) }
 
     // Seeded once and saved debounced, so typing is never overwritten by the stored value coming back.
     var instructions by rememberSaveable { mutableStateOf(settings.customInstructions) }
@@ -143,6 +145,27 @@ fun SettingsScreen(
                 onValueChangeFinished = { vm.setTemperature(temperature) },
             )
             Text("Lower is more focused, higher is more varied.", style = MaterialTheme.typography.bodySmall)
+
+            val budget = ThinkBudget.STEPS[thinkStep.roundToInt().coerceIn(0, ThinkBudget.STEPS.lastIndex)]
+            // Read when released, not from this composition: the last drag step may not have recomposed yet.
+            val stepBudget = { ThinkBudget.STEPS[thinkStep.roundToInt().coerceIn(0, ThinkBudget.STEPS.lastIndex)] }
+            Text(
+                "Thinking budget: " + ThinkBudget.label(budget),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Slider(
+                value = thinkStep,
+                onValueChange = { thinkStep = it.roundToInt().toFloat() },
+                valueRange = 0f..ThinkBudget.STEPS.lastIndex.toFloat(),
+                steps = ThinkBudget.STEPS.size - 2,
+                onValueChangeFinished = { vm.setThinkBudget(stepBudget()) },
+            )
+            Text(
+                "How long the model may reason (with Think on) before it must answer. More can help hard " +
+                    "questions but takes longer and uses more of the context.",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             Row(modifier = Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {

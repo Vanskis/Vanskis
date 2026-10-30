@@ -11,7 +11,7 @@ runs locally after a one-time model download. It is for personal use and install
 | App | Liquid Pocket, `com.vanskis.liquidpocket`, opened from a regular launcher icon |
 | Stack | Kotlin and Jetpack Compose |
 | Runtime | llama.cpp through JNI, on the CPU, behind an `Engine` interface so LEAP or an NPU backend can be added later |
-| Main model | LFM3-1.7B (`LiquidAI/LFM3-1.7B-GGUF`, Q4_0, about 1.05 GB). Text, thinking, tools and web search. A "Think" chip in the composer is on by default; thinking is capped at 2048 tokens (v3). Superseded the LFM2.5-8B-A1B swap, whose file is deleted on upgrade |
+| Main model | LFM3-1.7B (`LiquidAI/LFM3-1.7B-GGUF`, Q4_0, about 1.05 GB). Text, thinking, tools and web search. A "Think" chip in the composer is on by default; thinking is capped by the Settings "Thinking budget" (2K tokens by default; 256 to 8K or no limit). Superseded the LFM2.5-8B-A1B swap, whose file is deleted on upgrade |
 | Media model | LFM3-Omni-2B, Q4_K_M (about 1.3 GB). Loaded on demand (one model in memory at a time) to answer photo and voice messages itself, and to look at photos for tools. Each photo also gets a hidden caption so LFM3-1.7B can follow up |
 | Model delivery | Downloaded in the app from Hugging Face LiquidAI GGUF repos over Wi-Fi, with resume and a checksum check. After that, inference needs no network |
 | Voice | Omni speaks its own replies; Android TTS reads LFM3-1.7B replies. Android `SpeechRecognizer` is the dictation fallback. Live voice mode: full-screen orb, ends a turn on ~0.8 s of silence, barge-in interrupts; the user picks Omni (fast, own voice) or LFM3-1.7B + Android voice (thinking, search) |
@@ -74,7 +74,7 @@ v81 output reports, conv layers likely on CPU); DuckDuckGo lite is unofficial an
 
 - **Long replies:** a reply runs until it ends or the context is full; a cut-off reply (context
   full or Stop) gets a Continue chip, which sends "Continue from where you stopped." through
-  autocompact. Thinking is capped at 2048 tokens, then the engine closes the think block and the
+  autocompact. Thinking is capped (Settings, "Thinking budget": 2K by default, 256 to 8K or no limit), then the engine closes the think block and the
   answer follows. Think harder is removed.
 - **Math:** offline JLaTeXMath, inline in replies and user bubbles. `$…$` (strict, so prices stay
   text), `$$…$$`, `\(…\)`, `\[…\]`; code is never math; a formula that does not parse shows its

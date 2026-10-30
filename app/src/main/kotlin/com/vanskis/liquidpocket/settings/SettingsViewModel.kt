@@ -54,6 +54,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.setContextSize(value) }
     }
 
+    fun setThinkBudget(value: Int) {
+        viewModelScope.launch { repo.setThinkBudget(value) }
+    }
+
     fun setTemperature(value: Float) {
         viewModelScope.launch { repo.setTemperature(value) }
     }
