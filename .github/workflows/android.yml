@@ -122,3 +122,112 @@ jobs:
             Version: 0.1.${{ github.run_number }}
 
             Open this page in the phone's browser and tap the APK to install.
+
+  # Private NPU (Hexagon) variant: built with -PlpHexagon and uploaded only as the workflow artifact
+  # `liquid-pocket-npu`. It is never attached to a release; the public prerelease stays CPU-only.
+  npu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HEXAGON_SDK_URL: https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.7.0.0/hexagon-sdk-v6.7.0.0-amd64-lnx.tar.xz
+      HEXAGON_SDK_SHA256: 00725fc449916d7b9af2c2a3c6b54d61f3c872d5dbc1d3ca3fd2f839b1d5dc70
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+
+      - name: Install NDK, CMake and platform
+        run: sdkmanager --install "ndk;29.0.13113456" "cmake;3.31.6" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The tarball (742 MB) is cached rather than the 3.3 GB unpacked tree.
+      - name: Restore Hexagon SDK tarball
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hexagon-sdk.tar.xz
+          key: hexagon-sdk-${{ env.HEXAGON_SDK_SHA256 }}
+
+      - name: Fetch, verify and unpack the Hexagon SDK
+        run: |
+          tarball="$RUNNER_TEMP/hexagon-sdk.tar.xz"
+          if [ ! -f "$tarball" ]; then
+            curl -fL --retry 3 -o "$tarball" "$HEXAGON_SDK_URL"
+          fi
+          echo "$HEXAGON_SDK_SHA256  $tarball" | sha256sum -c -
+          dest="$RUNNER_TEMP/hexagon-sdk"
+          mkdir -p "$dest"
+          tar -xJf "$tarball" -C "$dest"
+          sdk_json=$(find "$dest" -maxdepth 3 -name hexagon_sdk.json | head -n 1)
+          if [ -z "$sdk_json" ]; then
+            echo "::error::hexagon_sdk.json not found in the SDK tarball"
+            exit 1
+          fi
+          echo "HEXAGON_SDK_ROOT=$(dirname "$sdk_json")" >> "$GITHUB_ENV"
+          echo "Hexagon SDK at $(dirname "$sdk_json")"
+
+      - name: Restore debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Configure release signing
+        env:
+          LP_KEYSTORE_BASE64: ${{ secrets.LP_KEYSTORE_BASE64 }}
+          LP_KEYSTORE_PASSWORD: ${{ secrets.LP_KEYSTORE_PASSWORD }}
+          LP_KEY_ALIAS: ${{ secrets.LP_KEY_ALIAS }}
+          LP_KEY_PASSWORD: ${{ secrets.LP_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LP_KEYSTORE_BASE64" ]; then
+            printf '%s' "$LP_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            {
+              echo "LP_KEYSTORE_PATH=$RUNNER_TEMP/release.jks"
+              echo "LP_KEYSTORE_PASSWORD=$LP_KEYSTORE_PASSWORD"
+              echo "LP_KEY_ALIAS=$LP_KEY_ALIAS"
+              echo "LP_KEY_PASSWORD=$LP_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Release signing configured."
+          else
+            echo "::warning::LP_KEYSTORE_BASE64 is not set; the APK is debug-signed."
+          fi
+
+      - name: Gradle build (NPU release APK)
+        env:
+          LP_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew --no-daemon -PlpHexagon :app:assembleRelease
+
+      - name: Check the APK carries the NPU libraries
+        id: apk
+        run: |
+          src=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          libs=$(unzip -l "$src" | awk '{print $4}' | grep '^lib/arm64-v8a/' | sort)
+          echo "$libs"
+          for lib in liblp-hexagon.so libggml-htp-v73.so libggml-htp-v75.so libggml-htp-v79.so libggml-htp-v81.so libggml-htp-v85.so; do
+            echo "$libs" | grep -qx "lib/arm64-v8a/$lib" || { echo "::error::$lib missing from the NPU APK"; exit 1; }
+          done
+          if echo "$libs" | grep -qx 'lib/arm64-v8a/libggml-hexagon.so'; then
+            echo "::error::libggml-hexagon.so would be auto-loaded by ggml_backend_load_all_from_path"
+            exit 1
+          fi
+          mkdir -p dist
+          dest="dist/liquid-pocket-npu-${{ github.run_number }}.apk"
+          cp "$src" "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload NPU APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquid-pocket-npu
+          path: ${{ steps.apk.outputs.path }}

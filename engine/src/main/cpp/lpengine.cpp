@@ -28,6 +28,18 @@
 //     const char *  llama_print_system_info(void);
 //   ggml/include/ggml-backend.h
 //     void ggml_backend_load_all_from_path(const char * dir_path);
+//     ggml_backend_reg_t ggml_backend_load(const char * path);   // null when the backend does not init
+//     size_t ggml_backend_reg_dev_count(ggml_backend_reg_t reg);
+//     ggml_backend_dev_t ggml_backend_reg_dev_get(ggml_backend_reg_t reg, size_t index);
+//     const char * ggml_backend_dev_name(ggml_backend_dev_t device);
+//   include/llama.h (device selection)
+//     llama_model_params { ggml_backend_dev_t * devices;   // NULL-terminated; NULL = every device
+//                          int32_t n_gpu_layers; ... }     // default -1: all layers offloaded
+//   ggml/src/ggml-hexagon (NPU builds, built as liblp-hexagon.so)
+//     ggml_backend_hexagon_reg() opens a FastRPC session per device (HTP0 by default) and throws
+//     std::runtime_error when the DSP refuses it (e.g. DSPRPC_CONTROL_UNSIGNED_MODULE); it returns
+//     null when libcdsprpc.so cannot be loaded. The DSP loads file:///libggml-htp-v<arch>.so from
+//     ADSP_LIBRARY_PATH.
 //   common/common.h
 //     common_batch(llama_context * ctx); void clear();
 //     int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
@@ -115,9 +127,12 @@
 
 #include <jni.h>
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <set>
@@ -141,6 +156,12 @@ constexpr int CTX_MIN = 2048;
 constexpr int CTX_MAX = 32768;
 constexpr int BATCH_SIZE = 512;
 
+// The Hexagon backend's file name in NPU builds (OUTPUT_NAME in CMakeLists.txt, NPU_LIB in
+// LlamaEngine.kt): not libggml-hexagon.so, so ggml_backend_load_all_from_path() never loads it.
+constexpr const char * NPU_LIB = "liblp-hexagon.so";
+// Where FastRPC looks for DSP libraries by default; kept after the app's own directory.
+constexpr const char * ADSP_SYSTEM_PATHS = "/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp";
+
 // Role and media codes shared with LlamaNative.kt.
 constexpr jint ROLE_SYSTEM = 0;
 constexpr jint ROLE_USER = 1;
@@ -162,6 +183,9 @@ struct unit {
         return token == o.token && (token != LLAMA_TOKEN_NULL || (media_id == o.media_id && n_tokens == o.n_tokens));
     }
 };
+
+// The Hexagon backend once nativeInitNpu has loaded it (stays loaded for the process).
+ggml_backend_reg_t g_npu_reg = nullptr;
 
 llama_model * g_model = nullptr;
 llama_context * g_ctx = nullptr;
@@ -641,15 +665,86 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInit(JNIEnv * env, jobjec
     LOGi("System info: %s", llama_print_system_info());
 }
 
-// Returns the context size actually allocated. jmmproj may be null (no projector).
+// Loads the Hexagon (NPU) backend from jlib_dir, after nativeInit. Returns null on success (or if
+// it is already loaded), otherwise why the NPU cannot be used. Never throws: the caller falls back
+// to the CPU.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInitNpu(JNIEnv * env, jobject /*thiz*/, jstring jlib_dir) {
+    if (g_npu_reg != nullptr) return nullptr;
+    const std::string lib_dir = jstring_to_std(env, jlib_dir);
+    const std::string lib = lib_dir + "/" + NPU_LIB;
+    std::string reason;
+    if (access(lib.c_str(), R_OK) != 0) {
+        reason = "this build has no NPU support";
+    } else {
+        // The DSP opens the skels (libggml-htp-v<arch>.so, next to the backend) from here; it is
+        // read when the backend opens its sessions, so it must be set before ggml_backend_load.
+        const char * prev = getenv("ADSP_LIBRARY_PATH");
+        const std::string adsp = lib_dir + ";" + (prev != nullptr && prev[0] != '\0' ? prev : ADSP_SYSTEM_PATHS);
+        setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
+        LOGi("Loading the NPU backend %s (ADSP_LIBRARY_PATH=%s)", lib.c_str(), adsp.c_str());
+        try {
+            g_npu_reg = ggml_backend_load(lib.c_str());
+            if (g_npu_reg == nullptr) {
+                reason = "the NPU backend did not start (no Hexagon DSP, or libcdsprpc.so is unavailable)";
+            } else if (ggml_backend_reg_dev_count(g_npu_reg) == 0) {
+                reason = "the NPU backend found no devices";
+            }
+        } catch (const std::exception & e) {
+            g_npu_reg = nullptr;
+            reason = std::string("the NPU backend did not start: ") + e.what();
+        } catch (...) {
+            g_npu_reg = nullptr;
+            reason = "the NPU backend did not start (unknown error)";
+        }
+    }
+    if (reason.empty()) {
+        LOGi("NPU backend ready: %zu device(s), first %s", ggml_backend_reg_dev_count(g_npu_reg),
+             ggml_backend_dev_name(ggml_backend_reg_dev_get(g_npu_reg, 0)));
+        return nullptr;
+    }
+    LOGw("NPU unavailable: %s", reason.c_str());
+    return env->NewStringUTF(reason.c_str());
+}
+
+// Returns the context size actually allocated. jmmproj may be null (no projector). jnpu: offload
+// every layer to the NPU devices (nativeInitNpu must have succeeded); otherwise CPU only.
 extern "C" JNIEXPORT jint JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobject /*thiz*/, jstring jpath,
-                                                           jstring jmmproj, jint jn_ctx, jint jn_threads) {
+                                                           jstring jmmproj, jint jn_ctx, jint jn_threads,
+                                                           jboolean jnpu) {
     free_all();
     const std::string path = jstring_to_std(env, jpath);
+    const bool npu = jnpu == JNI_TRUE;
+    if (npu && g_npu_reg == nullptr) {
+        throw_java(env, "The NPU backend is not loaded");
+        return 0;
+    }
 
+    // The defaults offload every layer (n_gpu_layers = -1) to every registered GPU-type device,
+    // which would put a CPU-mode model on the NPU once its backend is loaded. So the device list is
+    // always explicit: the NPU devices for the NPU, none (CPU only, as llama's `--device none`) and
+    // no offloaded layers for the CPU.
     llama_model_params mparams = llama_model_default_params();
-    g_model = llama_model_load_from_file(path.c_str(), mparams);
+    std::vector<ggml_backend_dev_t> devices;
+    if (npu) {
+        for (size_t i = 0; i < ggml_backend_reg_dev_count(g_npu_reg); ++i) {
+            devices.push_back(ggml_backend_reg_dev_get(g_npu_reg, i));
+        }
+        mparams.n_gpu_layers = -1;
+    } else {
+        mparams.n_gpu_layers = 0;
+    }
+    devices.push_back(nullptr);
+    mparams.devices = devices.data();
+    try {
+        g_model = llama_model_load_from_file(path.c_str(), mparams);
+    } catch (const std::exception & e) {
+        // The NPU backend throws when it cannot allocate or reach the DSP.
+        g_model = nullptr;
+        throw_java(env, std::string("Could not load model: ") + e.what());
+        return 0;
+    }
     if (g_model == nullptr) {
         throw_java(env, "Could not load model (unsupported or corrupt GGUF?): " + path);
         return 0;
@@ -667,7 +762,14 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
     cparams.n_ubatch = BATCH_SIZE;
     cparams.n_threads = jn_threads;
     cparams.n_threads_batch = jn_threads;
-    g_ctx = llama_init_from_model(g_model, cparams);
+    try {
+        g_ctx = llama_init_from_model(g_model, cparams);
+    } catch (const std::exception & e) {
+        g_ctx = nullptr;
+        free_all();
+        throw_java(env, std::string("Could not create a llama context: ") + e.what());
+        return 0;
+    }
     if (g_ctx == nullptr) {
         free_all();
         throw_java(env, "Could not create a llama context of " + std::to_string(n_ctx) + " tokens (out of memory?)");
@@ -702,8 +804,9 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
             if (!g_gen.valid()) LOGw("The projector generates audio, but its pipeline could not be set up");
         }
     }
-    LOGi("Loaded %s: n_ctx=%d (requested %d, trained %d), threads=%d, projector=%s", path.c_str(), g_n_ctx,
-         static_cast<int>(jn_ctx), n_train, static_cast<int>(jn_threads), g_mtmd != nullptr ? "yes" : "no");
+    LOGi("Loaded %s: n_ctx=%d (requested %d, trained %d), threads=%d, projector=%s, accelerator=%s", path.c_str(),
+         g_n_ctx, static_cast<int>(jn_ctx), n_train, static_cast<int>(jn_threads), g_mtmd != nullptr ? "yes" : "no",
+         npu ? "NPU" : "CPU");
     return g_n_ctx;
 }
 

@@ -8,6 +8,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// `-PlpHexagon` builds the opt-in NPU (Hexagon) variant; it needs the Hexagon SDK in $HEXAGON_SDK_ROOT.
+// Only the private CI job `npu` sets it: the public APK stays CPU-only.
+val lpHexagon = providers.gradleProperty("lpHexagon").isPresent
+val hexagonSdkRoot: String? = providers.environmentVariable("HEXAGON_SDK_ROOT").orNull
+if (lpHexagon && hexagonSdkRoot.isNullOrBlank()) {
+    throw GradleException("-PlpHexagon needs HEXAGON_SDK_ROOT set to the unpacked Hexagon SDK")
+}
+
 android {
     namespace = "com.vanskis.liquidpocket.engine"
     compileSdk = 36
@@ -31,6 +39,10 @@ android {
                 arguments += "-DGGML_BACKEND_DL=ON"
                 arguments += "-DGGML_CPU_ALL_VARIANTS=ON"
                 arguments += "-DGGML_LLAMAFILE=OFF"
+                if (lpHexagon) {
+                    arguments += "-DLP_HEXAGON=ON"
+                    arguments += "-DHEXAGON_SDK_ROOT=$hexagonSdkRoot"
+                }
             }
         }
     }
@@ -51,6 +63,13 @@ android {
     // ggml_backend_load_all_from_path() finds them. The app module needs the same flag.
     packaging {
         jniLibs.useLegacyPackaging = true
+        // The HTP skels are Hexagon DSP code, not arm64: package them as built.
+        if (lpHexagon) jniLibs.keepDebugSymbols += "**/libggml-htp-*.so"
+    }
+
+    // libcdsprpc.so (FastRPC) is a vendor library: an app has to declare it to dlopen it.
+    if (lpHexagon) {
+        sourceSets.getByName("main").manifest.srcFile("src/hexagon/AndroidManifest.xml")
     }
 }
 

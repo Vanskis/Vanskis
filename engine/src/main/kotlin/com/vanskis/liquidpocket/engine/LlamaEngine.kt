@@ -7,6 +7,7 @@ import android.util.Log
 import java.io.File
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -57,6 +58,22 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
     // Engine-thread state.
     private var nativeReady = false
     private var loaded: EngineState.Ready? = null
+    private var loadedConfig: EngineConfig? = null
+    // The NPU backend is started at most once per process; a failure is remembered, not retried.
+    private var npuTried = false
+    private var npuError: String? = null
+
+    override val npuAvailable: Boolean
+        get() = File(nativeLibDir, NPU_LIB).isFile
+
+    /** Starts the NPU backend (once); returns why it cannot be used, or null. Engine thread. */
+    private fun initNpu(): String? {
+        if (!npuTried) {
+            npuError = LlamaNative.nativeInitNpu(nativeLibDir)
+            npuTried = true
+        }
+        return npuError
+    }
 
     override suspend fun load(modelPath: String, config: EngineConfig) {
         stop()
@@ -77,10 +94,16 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
                     requireReadable(modelPath, "Model")
                     config.mmprojPath?.let { requireReadable(it, "Projector") }
                     val threads = ThreadPolicy.threadsFor(Runtime.getRuntime().availableProcessors())
-                    val contextSize = LlamaNative.nativeLoad(modelPath, config.mmprojPath, config.contextSize, threads)
+                    val outcome = AcceleratorFallback.load(config.accelerator, npuAvailable, ::initNpu) { acc ->
+                        LlamaNative.nativeLoad(
+                            modelPath, config.mmprojPath, config.contextSize, threads, acc == Accelerator.NPU,
+                        )
+                    }
+                    outcome.note?.let { Log.w(TAG, it) }
                     val caps = NativeCapabilities.of(LlamaNative.nativeCapabilities())
-                    val ready = EngineState.Ready(modelPath, contextSize)
+                    val ready = EngineState.Ready(modelPath, outcome.value, outcome.accelerator, outcome.note)
                     loaded = ready
+                    loadedConfig = config
                     _capabilities.value = caps
                     _state.value = ready
                 } catch (e: CancellationException) {
@@ -106,6 +129,42 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
             }
         }
     }
+
+    override suspend fun benchmark(): BenchResult {
+        val (start, config) = current() ?: throw EngineException("No model loaded")
+        val statsBefore = _lastStats.value
+        try {
+            val cpu = benchOn(Accelerator.CPU, start.modelPath, config).first ?: 0.0
+            val (npu, npuNote) =
+                if (npuAvailable) benchOn(Accelerator.NPU, start.modelPath, config) else null to NO_NPU_BUILD
+            return BenchResult(cpu, npu, npuNote)
+        } finally {
+            withContext(NonCancellable) {
+                // Leave the model loaded the way the user asked for, and their last reply's stats.
+                if (current()?.second != config) load(start.modelPath, config)
+                _lastStats.value = statsBefore
+            }
+        }
+    }
+
+    /** Decode tokens/s of the bench reply on [acc], or null and why when the model could not run there. */
+    private suspend fun benchOn(acc: Accelerator, modelPath: String, config: EngineConfig): Pair<Double?, String?> {
+        if (current()?.first?.accelerator != acc) load(modelPath, config.copy(accelerator = acc))
+        val ready = current()?.first ?: throw EngineException("No model loaded")
+        if (ready.accelerator != acc) return null to ready.acceleratorNote
+        chat(BENCH_PROMPT, BENCH_PARAMS).collect {}
+        return _lastStats.value?.decodeTokensPerSecond to null
+    }
+
+    /** The loaded model and the config it was loaded with, null when idle. */
+    private suspend fun current(): Pair<EngineState.Ready, EngineConfig>? =
+        mutex.withLock {
+            withContext(dispatcher) {
+                val ready = loaded
+                val config = loadedConfig
+                if (ready != null && config != null) ready to config else null
+            }
+        }
 
     override suspend fun countTokens(messages: List<ChatMessage>, params: GenerationParams): Int =
         mutex.withLock {
@@ -290,6 +349,14 @@ internal class LlamaEngine(private val nativeLibDir: String) : Engine {
 
     private companion object {
         const val TAG = "LlamaEngine"
+
+        /** The NPU backend's file name (OUTPUT_NAME in CMakeLists.txt, NPU_LIB in lpengine.cpp). */
+        const val NPU_LIB = "liblp-hexagon.so"
+        const val NO_NPU_BUILD = AcceleratorFallback.NO_NPU_BUILD
+
+        /** [benchmark]: a fixed prompt with a long answer, 32 greedy tokens without thinking. */
+        val BENCH_PROMPT = listOf(ChatMessage(Role.USER, "Count from 1 to 100, separated by commas."))
+        val BENCH_PARAMS = GenerationParams(temperature = 0f, maxNewTokens = 32, think = false)
 
         /** LFM3 (`<tool_call>`) and LFM2/2.5 (`<|tool_call_start|>`) tool-call openers. */
         val LFM_TOOL_STARTS = listOf("<tool_call>", "<|tool_call_start|>")
