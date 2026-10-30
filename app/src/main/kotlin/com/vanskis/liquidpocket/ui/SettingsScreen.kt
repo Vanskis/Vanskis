@@ -200,6 +200,20 @@ fun SettingsScreen(
                 Switch(checked = settings.webSearch, onCheckedChange = vm::setWebSearch)
             }
 
+            Text("Chat indicators", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            val shown = settings.indicators
+            listOf(
+                Triple("Thinking speed", shown.thinkingSpeed) { on: Boolean -> shown.copy(thinkingSpeed = on) },
+                Triple("Answer speed", shown.answerSpeed) { on: Boolean -> shown.copy(answerSpeed = on) },
+                Triple("Token count", shown.tokenCount) { on: Boolean -> shown.copy(tokenCount = on) },
+                Triple("Elapsed time", shown.elapsed) { on: Boolean -> shown.copy(elapsed = on) },
+            ).forEach { (label, checked, change) ->
+                Row(modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Switch(checked = checked, onCheckedChange = { vm.setIndicators(change(it)) })
+                }
+            }
+
             Text("Custom instructions", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
             Text("Added to the system prompt of every new chat.", style = MaterialTheme.typography.bodySmall)
             FlowRow(

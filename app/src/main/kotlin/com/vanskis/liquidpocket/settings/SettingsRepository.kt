@@ -20,6 +20,7 @@ import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.ui.components.Indicators
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -37,6 +38,8 @@ data class AppSettings(
     val voiceEngine: VoiceEngine = VoiceEngine.MODEL,
     /** Offer the model web_search and fetch_page; their queries are the only data that leaves the phone. */
     val webSearch: Boolean = true,
+    /** Which reply numbers the chat shows: speeds, token count, elapsed time. */
+    val indicators: Indicators = Indicators(),
     /** Free text added to the system prompt of every new chat; empty adds nothing. */
     val customInstructions: String = "",
     /** Let the model reason before it answers (the composer's Think chip). */
@@ -82,6 +85,12 @@ class SettingsRepository(context: Context) {
                 speakReplies = prefs[SPEAK_REPLIES] ?: false,
                 voiceEngine = VoiceEngine.entries.firstOrNull { it.name == prefs[VOICE_ENGINE] } ?: VoiceEngine.MODEL,
                 webSearch = prefs[WEB_SEARCH] ?: true,
+                indicators = Indicators(
+                    thinkingSpeed = prefs[SHOW_THINKING_SPEED] ?: true,
+                    answerSpeed = prefs[SHOW_ANSWER_SPEED] ?: true,
+                    tokenCount = prefs[SHOW_TOKEN_COUNT] ?: false,
+                    elapsed = prefs[SHOW_ELAPSED] ?: true,
+                ),
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
                 think = prefs[THINK] ?: true,
                 thinkBudget = prefs[THINK_BUDGET]?.let(ThinkBudget::clamp) ?: ThinkBudget.DEFAULT,
@@ -113,6 +122,10 @@ class SettingsRepository(context: Context) {
             it[SPEAK_REPLIES] = value.speakReplies
             it[VOICE_ENGINE] = value.voiceEngine.name
             it[WEB_SEARCH] = value.webSearch
+            it[SHOW_THINKING_SPEED] = value.indicators.thinkingSpeed
+            it[SHOW_ANSWER_SPEED] = value.indicators.answerSpeed
+            it[SHOW_TOKEN_COUNT] = value.indicators.tokenCount
+            it[SHOW_ELAPSED] = value.indicators.elapsed
             it[CUSTOM_INSTRUCTIONS] = value.customInstructions.take(SystemPrompt.MAX_CUSTOM_CHARS)
             it[THINK] = value.think
             it[THINK_BUDGET] = ThinkBudget.clamp(value.thinkBudget)
@@ -176,6 +189,10 @@ class SettingsRepository(context: Context) {
         val SPEAK_REPLIES = booleanPreferencesKey("speak_replies")
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
         val WEB_SEARCH = booleanPreferencesKey("web_search")
+        val SHOW_THINKING_SPEED = booleanPreferencesKey("show_thinking_speed")
+        val SHOW_ANSWER_SPEED = booleanPreferencesKey("show_answer_speed")
+        val SHOW_TOKEN_COUNT = booleanPreferencesKey("show_token_count")
+        val SHOW_ELAPSED = booleanPreferencesKey("show_elapsed")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val USER_SKILLS = stringPreferencesKey("user_skills")
         val HERETIC_TEXT = booleanPreferencesKey("heretic_text")

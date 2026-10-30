@@ -4,10 +4,12 @@ import com.vanskis.liquidpocket.chat.Turn
 import com.vanskis.liquidpocket.engine.GenerationStats
 import com.vanskis.liquidpocket.engine.Role
 import com.vanskis.liquidpocket.ui.components.ContextLevel
+import com.vanskis.liquidpocket.ui.components.Indicators
 import com.vanskis.liquidpocket.ui.components.contextFraction
 import com.vanskis.liquidpocket.ui.components.contextLevel
 import com.vanskis.liquidpocket.ui.components.contextTokensUsed
 import com.vanskis.liquidpocket.ui.components.formatTokenCount
+import com.vanskis.liquidpocket.ui.components.liveAnswerLabel
 import com.vanskis.liquidpocket.ui.components.statsSummary
 import com.vanskis.liquidpocket.ui.components.thinkingLabel
 import org.junit.Assert.assertEquals
@@ -64,17 +66,32 @@ class ChatNumbersTest {
 
     @Test fun `stats line shows speed and time to first token`() {
         val stats = GenerationStats(promptTokens = 200, prefillTokensPerSecond = 500.0, generatedTokens = 120, decodeTokensPerSecond = 23.4)
-        assertEquals("23 tok/s · 0.4 s to first token", statsSummary(stats))
-        assertEquals("23 tok/s", statsSummary(stats.copy(prefillTokensPerSecond = 0.0)))
+        assertEquals("23 tok/s · 0.4 s to first token", statsSummary(stats, Indicators()))
+        assertEquals("23 tok/s", statsSummary(stats.copy(prefillTokensPerSecond = 0.0), Indicators()))
+        assertEquals("23 tok/s · 0.4 s to first token · 120 tokens", statsSummary(stats))
     }
 
     @Test fun `thinking header follows the stream`() {
         assertEquals("Thinking…", thinkingLabel(null, streaming = true))
         assertEquals("Thought for 12s", thinkingLabel(12, streaming = false))
         assertEquals("Thoughts", thinkingLabel(null, streaming = false))
-        assertEquals("Thinking · 12s · 340 tokens", thinkingLabel(12, streaming = true, tokens = 340))
+        assertEquals("Thinking · 12s · 28 tok/s · 340 tokens", thinkingLabel(12, streaming = true, tokens = 340))
         assertEquals("Thinking · 0s · 1 token", thinkingLabel(null, streaming = true, tokens = 1))
-        assertEquals("Thought for 12s · 340 tokens", thinkingLabel(12, streaming = false, tokens = 340))
+        assertEquals("Thought for 12s · 28 tok/s · 340 tokens", thinkingLabel(12, streaming = false, tokens = 340))
         assertEquals("Thought for 3s", thinkingLabel(3, streaming = false, tokens = 0))
+    }
+
+    @Test
+    fun indicatorsTurnOffTheirParts() {
+        val defaults = Indicators()
+        assertEquals("Thinking · 12s · 28 tok/s", thinkingLabel(12, streaming = true, tokens = 340, show = defaults))
+        assertEquals("Thoughts · 28 tok/s", thinkingLabel(12, streaming = false, tokens = 340, show = defaults.copy(elapsed = false)))
+        assertEquals("Thinking…", thinkingLabel(12, streaming = true, tokens = 340, show = Indicators(false, false, false, false)))
+        val stats = GenerationStats(promptTokens = 0, prefillTokensPerSecond = 0.0, generatedTokens = 200, decodeTokensPerSecond = 23.0, thinkingTokens = 20)
+        assertEquals("23 tok/s", statsSummary(stats, defaults))
+        assertEquals("180 tokens", statsSummary(stats, Indicators(answerSpeed = false, tokenCount = true)))
+        assertEquals(null, statsSummary(stats, Indicators(answerSpeed = false)))
+        assertEquals(null, liveAnswerLabel(10, 900))
+        assertEquals("Writing · 20 tok/s", liveAnswerLabel(30, 1500))
     }
 }

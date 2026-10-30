@@ -51,6 +51,7 @@ import com.vanskis.liquidpocket.media.AndroidMediaLoader
 import com.vanskis.liquidpocket.ui.components.ChatLayout
 import com.vanskis.liquidpocket.ui.components.ChatMediaUi
 import com.vanskis.liquidpocket.ui.components.LocalGalleryThumbnail
+import com.vanskis.liquidpocket.ui.components.LocalIndicators
 import com.vanskis.liquidpocket.ui.components.LocalImageThumbnail
 import com.vanskis.liquidpocket.ui.components.LocalMathRenderer
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val conversations by vm.conversations.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
     val speakReplies by vm.speakReplies.collectAsStateWithLifecycle()
+    val indicators by vm.indicators.collectAsStateWithLifecycle()
     val recordingMillis by vm.recordingMillis.collectAsStateWithLifecycle()
     val transcript by vm.transcript.collectAsStateWithLifecycle()
     val think by vm.think.collectAsStateWithLifecycle()
@@ -215,6 +217,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     CompositionLocalProvider(
         LocalImageThumbnail provides thumbnail,
         LocalGalleryThumbnail provides gallery,
+        LocalIndicators provides indicators,
         LocalMathRenderer provides math,
     ) {
         ChatLayout(

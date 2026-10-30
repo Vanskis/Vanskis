@@ -98,7 +98,7 @@ fun ThinkingSection(
                 { 1f }
             }
             Text(
-                thinkingLabel(seconds ?: liveSeconds, streaming, tokens),
+                thinkingLabel(seconds ?: liveSeconds, streaming, tokens, LocalIndicators.current),
                 style = MaterialTheme.typography.labelLarge,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.graphicsLayer { alpha = pulse() },

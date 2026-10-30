@@ -37,25 +37,61 @@ fun contextTokensUsed(turns: List<Turn>): Int {
     return stats.promptTokens + stats.generatedTokens
 }
 
-/** "23 tok/s · 0.4 s to first token"; the second part only when the prefill speed is known. */
-fun statsSummary(stats: GenerationStats): String {
-    val decode = String.format(Locale.ROOT, "%.0f tok/s", stats.decodeTokensPerSecond)
-    if (stats.prefillTokensPerSecond <= 0.0 || stats.promptTokens <= 0) return decode
-    val firstToken = stats.promptTokens / stats.prefillTokensPerSecond
-    return decode + String.format(Locale.ROOT, " · %.1f s to first token", firstToken)
+/** Which numbers the chat shows about a reply; each is a switch in Settings. */
+data class Indicators(
+    /** Tokens a second while it thinks, and after. */
+    val thinkingSpeed: Boolean = true,
+    /** Tokens a second while it answers, and the speed and time to first token under the reply. */
+    val answerSpeed: Boolean = true,
+    /** How many tokens it thought and answered. */
+    val tokenCount: Boolean = false,
+    /** How long it thought. */
+    val elapsed: Boolean = true,
+) {
+    companion object {
+        val ALL = Indicators(thinkingSpeed = true, answerSpeed = true, tokenCount = true, elapsed = true)
+    }
 }
 
 /**
- * The thinking section's header: "Thinking · 12s · 340 tokens" while it streams (just "Thinking…"
- * before either is known), then "Thought for 12s · 340 tokens" (or "Thoughts").
+ * "23 tok/s · 0.4 s to first token · 180 tokens" as [show] allows: the speed and time to first
+ * token (when the prefill speed is known) with [Indicators.answerSpeed], the answer's tokens with
+ * [Indicators.tokenCount]. Null when nothing is to be shown.
  */
-fun thinkingLabel(seconds: Int?, streaming: Boolean, tokens: Int? = null): String {
+fun statsSummary(stats: GenerationStats, show: Indicators = Indicators.ALL): String? {
+    val parts = mutableListOf<String>()
+    if (show.answerSpeed) {
+        parts += String.format(Locale.ROOT, "%.0f tok/s", stats.decodeTokensPerSecond)
+        if (stats.prefillTokensPerSecond > 0.0 && stats.promptTokens > 0) {
+            parts += String.format(Locale.ROOT, "%.1f s to first token", stats.promptTokens / stats.prefillTokensPerSecond)
+        }
+    }
+    val answered = stats.generatedTokens - stats.thinkingTokens
+    if (show.tokenCount && answered > 0) parts += tokenCount(answered)
+    return parts.joinToString(" · ").ifEmpty { null }
+}
+
+/** "Writing · 21 tok/s" under a reply that is streaming, once a second of it has passed. */
+fun liveAnswerLabel(tokens: Int, millis: Long): String? =
+    if (tokens <= 0 || millis < 1000) null else String.format(Locale.ROOT, "Writing · %.0f tok/s", tokens * 1000.0 / millis)
+
+private fun tokenCount(n: Int) = if (n == 1) "1 token" else "$n tokens"
+
+/**
+ * The thinking section's header, as [show] allows: "Thinking · 12s · 28 tok/s · 340 tokens" while
+ * it streams (just "Thinking…" before anything is known), then "Thought for 12s · …" (or "Thoughts").
+ * The speed needs a second of thinking.
+ */
+fun thinkingLabel(seconds: Int?, streaming: Boolean, tokens: Int? = null, show: Indicators = Indicators.ALL): String {
     val time = seconds?.takeIf { it >= 0 }
-    val count = tokens?.takeIf { it > 0 }?.let { if (it == 1) "1 token" else "$it tokens" }
+    val thought = tokens?.takeIf { it > 0 }
+    val speed = if (show.thinkingSpeed && thought != null && time != null && time > 0) "${thought / time} tok/s" else null
+    val count = if (show.tokenCount) thought?.let(::tokenCount) else null
     val head = when {
-        streaming -> if (time == null && count == null) return "Thinking…" else "Thinking · ${time ?: 0}s"
-        time != null -> "Thought for ${time}s"
+        streaming -> if ((time == null && thought == null) || !show.elapsed) "Thinking" else "Thinking · ${time ?: 0}s"
+        time != null && show.elapsed -> "Thought for ${time}s"
         else -> "Thoughts"
     }
-    return if (count == null) head else "$head · $count"
+    val parts = listOfNotNull(head, speed, count)
+    return if (streaming && parts.size == 1) "Thinking…" else parts.joinToString(" · ")
 }

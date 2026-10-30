@@ -35,6 +35,7 @@ import com.vanskis.liquidpocket.tools.WebTools
 import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
 import com.vanskis.liquidpocket.ui.components.DocumentExtraction
+import com.vanskis.liquidpocket.ui.components.Indicators
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -136,6 +137,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     val speakReplies: StateFlow<Boolean> =
         settings.map { it.speakReplies }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val indicators: StateFlow<Indicators> =
+        settings.map { it.indicators }.stateIn(viewModelScope, SharingStarted.Eagerly, Indicators())
 
     private val _pending = MutableStateFlow<List<Attachment>>(emptyList())
 

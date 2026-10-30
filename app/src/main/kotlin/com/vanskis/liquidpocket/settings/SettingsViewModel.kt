@@ -14,6 +14,7 @@ import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
+import com.vanskis.liquidpocket.ui.components.Indicators
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +85,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setVoiceEngine(value: VoiceEngine) = edit { it.copy(voiceEngine = value) }
 
     fun setWebSearch(value: Boolean) = edit { it.copy(webSearch = value) }
+    fun setIndicators(value: Indicators) = edit { it.copy(indicators = value) }
 
     fun setLiveVoiceModel(value: LiveVoiceModel) = edit { it.copy(liveVoiceModel = value) }
 

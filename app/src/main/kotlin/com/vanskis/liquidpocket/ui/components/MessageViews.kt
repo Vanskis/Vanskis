@@ -32,8 +32,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -44,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.chat.Attachment
 import com.vanskis.liquidpocket.engine.GenerationStats
 import com.vanskis.liquidpocket.tools.Choices
+import kotlinx.coroutines.delay
 
 /** The user's message, right-aligned in a soft bubble under its [attachments]. [onEdit] and [onRetry] show only when given. */
 @Composable
@@ -128,6 +134,7 @@ fun AssistantMessage(
     thinking: String? = null,
     thinkingSeconds: Int? = null,
     thinkingTokens: Int? = null,
+    liveTokens: Int = 0,
 ) {
     Row(modifier = modifier.fillMaxWidth()) {
         AssistantMark(busy = streaming, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
@@ -140,6 +147,7 @@ fun AssistantMessage(
                 SelectionContainer {
                     MarkdownReply(text, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth(), streaming = streaming)
                 }
+                if (streaming && LocalIndicators.current.answerSpeed) LiveAnswerSpeed(liveTokens, Modifier.padding(start = 10.dp, top = 4.dp))
             }
             offer?.let { ChoiceChips(it, showQuestion = it.question !in text, onChoose = onChoose, onTypeOwn = onTypeOwn) }
             if (!streaming) {
@@ -156,6 +164,22 @@ fun AssistantMessage(
             }
         }
     }
+}
+
+/** "Writing · 21 tok/s" while a reply streams: [tokens] so far over the time since the first of them. */
+@Composable
+private fun LiveAnswerSpeed(tokens: Int, modifier: Modifier = Modifier) {
+    val latest by rememberUpdatedState(tokens)
+    var label by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        val startTokens = latest
+        val start = System.nanoTime()
+        while (true) {
+            delay(500)
+            label = liveAnswerLabel(latest - startTokens, (System.nanoTime() - start) / 1_000_000)
+        }
+    }
+    label?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier) }
 }
 
 /** The offer's [Choices.Offer.question] (unless the reply already says it), then a chip per option and "Type my own…". */
@@ -178,11 +202,15 @@ private fun ChoiceChips(offer: Choices.Offer, showQuestion: Boolean, onChoose: (
     }
 }
 
-/** "23 tok/s · 0.4 s to first token" under the newest reply. */
+/** Which reply numbers to show ([Indicators]); the chat screen provides the user's choice from Settings. */
+val LocalIndicators = staticCompositionLocalOf { Indicators() }
+
+/** "23 tok/s · 0.4 s to first token" under the newest reply, as [LocalIndicators] allows. */
 @Composable
 fun StatsLine(stats: GenerationStats, modifier: Modifier = Modifier) {
+    val summary = statsSummary(stats, LocalIndicators.current) ?: return
     Text(
-        statsSummary(stats),
+        summary,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,
