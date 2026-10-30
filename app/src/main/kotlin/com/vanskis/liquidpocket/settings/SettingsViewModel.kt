@@ -39,4 +39,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setWebSearch(value: Boolean) {
         viewModelScope.launch { repo.setWebSearch(value) }
     }
+
+    fun setCustomInstructions(value: String) {
+        viewModelScope.launch { repo.setCustomInstructions(value) }
+    }
 }

@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +30,8 @@ data class AppSettings(
     val voiceEngine: VoiceEngine = VoiceEngine.MODEL,
     /** Offer the model web_search and fetch_page; their queries are the only data that leaves the phone. */
     val webSearch: Boolean = true,
+    /** Free text added to the system prompt of every new chat; empty adds nothing. */
+    val customInstructions: String = "",
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -52,6 +55,7 @@ class SettingsRepository(context: Context) {
                 speakReplies = prefs[SPEAK_REPLIES] ?: false,
                 voiceEngine = VoiceEngine.entries.firstOrNull { it.name == prefs[VOICE_ENGINE] } ?: VoiceEngine.MODEL,
                 webSearch = prefs[WEB_SEARCH] ?: true,
+                customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
             )
         }
         .distinctUntilChanged()
@@ -80,6 +84,10 @@ class SettingsRepository(context: Context) {
         store.edit { it[WEB_SEARCH] = value }
     }
 
+    suspend fun setCustomInstructions(value: String) {
+        store.edit { it[CUSTOM_INSTRUCTIONS] = value.take(SystemPrompt.MAX_CUSTOM_CHARS) }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
@@ -87,5 +95,6 @@ class SettingsRepository(context: Context) {
         val SPEAK_REPLIES = booleanPreferencesKey("speak_replies")
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
         val WEB_SEARCH = booleanPreferencesKey("web_search")
+        val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
     }
 }
