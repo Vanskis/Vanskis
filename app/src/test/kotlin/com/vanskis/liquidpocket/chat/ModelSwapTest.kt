@@ -17,6 +17,7 @@ import com.vanskis.liquidpocket.engine.ToolSpec
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -286,6 +287,17 @@ class ModelSwapTest {
         advanceUntilIdle()
         c.ensureLoaded()
         assertEquals(listOf(TEXT.path, MEDIA.path, TEXT.path), engine.loads)
+    }
+
+    @Test fun `ensureLoaded during an open routes for the conversation opened`() = runTest {
+        store.saved[7L] = mutableListOf(Turn(Role.USER, "What is this?", attachments = photo), Turn(Role.ASSISTANT, "A cat"))
+        val c = controller()
+        c.open(7L)
+        // Called before the open has run: it waits for the open, then routes the turns it opened.
+        launch(start = CoroutineStart.UNDISPATCHED) { c.ensureLoaded() }
+        advanceUntilIdle()
+
+        assertEquals(listOf(MEDIA.path), engine.loads)
     }
 
     @Test fun `a new context size reloads the routed model`() = runTest {

@@ -169,9 +169,11 @@ class ChatController(
      */
     suspend fun ensureLoaded() {
         if (_state.value.generating) return
+        job?.join()
+        // Routed after the wait: the operation waited for (an open, say) may have changed the turns.
+        if (_state.value.generating) return
         val target = route(_state.value.turns, textOnly = false) ?: return
         if (isLoaded(target)) return
-        job?.join()
         load(target)
     }
 
