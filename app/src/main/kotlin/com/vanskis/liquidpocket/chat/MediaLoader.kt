@@ -1,7 +1,10 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.engine.AudioInput
+import com.vanskis.liquidpocket.engine.ChatMessage
+import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.engine.ImageInput
+import com.vanskis.liquidpocket.engine.Role
 
 /**
  * Turns attachment files into what the engine takes. The app decodes with Android
@@ -65,4 +68,21 @@ object MediaNotes {
     const val AUDIO_UNSUPPORTED = "[The user attached a voice message, but the current model cannot hear audio.]"
     const val IMAGE_MISSING = "[The user attached an image that is no longer available.]"
     const val AUDIO_MISSING = "[The user attached a voice message that is no longer available.]"
+}
+
+/**
+ * Captions a model that can see writes of photos, for a model that cannot: a user turn's
+ * ([Turn.caption]) and those a tool returns. Asked apart from the conversation, never streamed or spoken.
+ */
+object PhotoCaptions {
+    const val PROMPT = "Describe this photo in one or two sentences for someone who cannot see it."
+
+    /** Short, and without reasoning. */
+    val PARAMS = GenerationParams(maxNewTokens = 80, think = false)
+
+    /** The request for one caption of [images] (a turn's photos are captioned together). */
+    fun request(images: List<ImageInput>): List<ChatMessage> = listOf(ChatMessage(Role.USER, PROMPT, images = images))
+
+    /** What a model that cannot see is sent in place of a photo with [caption]. */
+    fun note(caption: String) = "[Photo: $caption]"
 }

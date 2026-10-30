@@ -98,6 +98,10 @@ const val MAX_TOOL_ROUNDS = 5
  * [Compaction.THRESHOLD_PERCENT] of the context; [compact] does it on request. A summary that fails
  * leaves the conversation as it was. [ChatState.contextUsed] is counted after each reply and on [open].
  * [accelerator] (also from Settings) is read for each load; a change reloads the model on the next turn.
+ *
+ * A model that can see captions the photos of the user turn it answered ([Turn.caption]); a model
+ * that cannot is sent the caption in their place. Photos a tool returns to a model that cannot see
+ * are captioned by the media model, swapped in for that and back out, and handed over as text.
  */
 class ChatController(
     private val engine: Engine,
@@ -122,6 +126,9 @@ class ChatController(
 
     /** Set by [stop] so a reply whose operation has not reached the engine yet is not started. */
     private var stopRequested = false
+
+    /** A reply's photos are being captioned ([captionPhotos]) after it ended; [stop] still stops that. */
+    private var captioning = false
 
     /** Completed with the user's answer to [ChatState.confirmation]. */
     private var approval: CompletableDeferred<Boolean>? = null
@@ -244,7 +251,7 @@ class ChatController(
 
     /** Ends the reply early; the text so far is kept as the assistant turn. A tool call awaiting approval is declined. */
     fun stop() {
-        if (_state.value.generating || _state.value.compacting) requestStop()
+        if (_state.value.generating || _state.value.compacting || captioning) requestStop()
     }
 
     /**
@@ -368,6 +375,7 @@ class ChatController(
                     runTools(calls, conversationId)
                     if (stopRequested) break
                 }
+                if (!stopRequested) captionPhotos(conversationId)
                 refreshContextUsed(system, params)
             } finally {
                 _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
@@ -448,10 +456,39 @@ class ChatController(
     }
 
     /** The model's summary for [plan], or null when it failed or came back empty. Nothing of it is streamed. */
-    private suspend fun summarize(plan: Compaction.Plan): String? =
+    private suspend fun summarize(plan: Compaction.Plan): String? = quietReply(Compaction.request(plan), Compaction.PARAMS)
+
+    /**
+     * The model's caption of the newest user turn's photos, if it can see them and the turn has none
+     * yet, saved on the turn ([Turn.caption]). A caption that fails, comes back empty or is stopped is left out.
+     */
+    private suspend fun captionPhotos(conversationId: Long?) {
+        if (!engine.capabilities.value.vision) return
+        val index = _state.value.lastUserIndex
+        val turn = _state.value.turns.getOrNull(index)?.takeIf { it.caption == null } ?: return
+        val photos = turn.attachments.filter { it.kind == AttachmentKind.IMAGE }
+        val images = withContext(work) { photos.mapNotNull { photo -> loadOrNull { media.image(photo.path) } } }
+        if (images.isEmpty()) return
+        captioning = true
+        val caption = try {
+            quietReply(PhotoCaptions.request(images), PhotoCaptions.PARAMS)
+        } finally {
+            captioning = false
+        }
+        if (caption == null || stopRequested) return
+        val captioned = turn.copy(caption = caption)
+        // A turn sent meanwhile has joined the turns already; this one is replaced where it still is.
+        _state.update { s ->
+            if (s.turns.getOrNull(index) !== turn) s else s.copy(turns = s.turns.toMutableList().also { it[index] = captioned })
+        }
+        if (conversationId != null) withContext(NonCancellable) { persist { store.replaceTurn(conversationId, index, captioned) } }
+    }
+
+    /** The model's text answer to [messages], or null when it failed or came back empty. Nothing of it is streamed or spoken. */
+    private suspend fun quietReply(messages: List<ChatMessage>, params: GenerationParams): String? =
         try {
             val text = StringBuilder()
-            engine.chat(Compaction.request(plan), Compaction.PARAMS)
+            engine.chat(messages, params)
                 .flowOn(work)
                 .collect { if (it is ReplyChunk.Text) text.append(it.text) }
             text.toString().trim().ifEmpty { null }
@@ -563,7 +600,8 @@ class ChatController(
 
     /**
      * Runs [calls] in order and commits a tool turn with each result. Images a tool returns follow
-     * the tool turns on a user turn of their own, as the engine takes images only on user turns.
+     * the tool turns on a user turn of their own, as the engine takes images only on user turns, or
+     * as their captions when the loaded model cannot see them ([captionToolPhotos]).
      */
     private suspend fun runTools(calls: List<ToolCall>, conversationId: Long?) {
         val shown = mutableListOf<Turn>()
@@ -574,7 +612,34 @@ class ChatController(
                 shown += Turn(Role.USER, "Photos from ${call.name}:", images = result.images, toolName = call.name)
             }
         }
-        shown.forEach { commit(conversationId, it) }
+        captionToolPhotos(shown).forEach { commit(conversationId, it) }
+    }
+
+    /**
+     * [shown] for a loaded model that cannot see: the media model is loaded in its place to caption
+     * each photo, then the text model is loaded back. A turn whose photos all got a caption has them
+     * in its text instead. Without the media model, or once stopped, [shown] stays as it is.
+     */
+    private suspend fun captionToolPhotos(shown: List<Turn>): List<Turn> {
+        if (shown.isEmpty() || engine.capabilities.value.vision || stopRequested) return shown
+        val mediaTarget = models.media() ?: return shown
+        val textTarget = models.text() ?: return shown
+        val captions = if (load(mediaTarget) && engine.capabilities.value.vision) {
+            shown.map { turn -> turn.images.map { if (stopRequested) null else quietReply(PhotoCaptions.request(listOf(it)), PhotoCaptions.PARAMS) } }
+        } else {
+            null
+        }
+        // Once stopped, the next reply loads the model it needs.
+        if (stopRequested) return shown
+        load(textTarget)
+        if (captions == null) return shown
+        return shown.zip(captions) { turn, texts ->
+            if (texts.any { it == null }) {
+                turn
+            } else {
+                turn.copy(text = (listOf(turn.text) + texts.map { PhotoCaptions.note(it!!) }).joinToString("\n"), images = emptyList())
+            }
+        }
     }
 
     private suspend fun runTool(call: ToolCall): ToolResult {
@@ -674,7 +739,7 @@ class ChatController(
         for (attachment in attachments) {
             when (attachment.kind) {
                 AttachmentKind.IMAGE -> when {
-                    !caps.vision -> notes += MediaNotes.IMAGE_UNSUPPORTED
+                    !caps.vision -> notes += caption?.let { PhotoCaptions.note(it) } ?: MediaNotes.IMAGE_UNSUPPORTED
                     else -> loadOrNull { media.image(attachment.path) }?.let { images += it } ?: run { notes += MediaNotes.IMAGE_MISSING }
                 }
                 AttachmentKind.AUDIO -> when {

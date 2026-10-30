@@ -30,6 +30,11 @@ data class Turn(
      * those). From here on the engine sees this summary and the turns after it, see [Compaction].
      */
     val summary: Boolean = false,
+    /**
+     * USER turns with photos: what they show, in a sentence or two, written by the media model once
+     * it answered the turn. A model that cannot see is sent this in their place. Never shown or spoken.
+     */
+    val caption: String? = null,
 ) {
     /** A user turn the app added for a tool, not one the user wrote. */
     val fromTool: Boolean get() = role == Role.USER && toolName != null
@@ -68,6 +73,11 @@ interface ChatStore {
     suspend fun replaceFrom(conversationId: Long, fromIndex: Int, turns: List<Turn>) {
         truncate(conversationId, fromIndex)
         turns.forEach { appendTurn(conversationId, it) }
+    }
+
+    /** Replaces the turn at position [index] (0 is the oldest) with [turn], keeping the turns after it. */
+    suspend fun replaceTurn(conversationId: Long, index: Int, turn: Turn) {
+        replaceFrom(conversationId, index, listOf(turn) + turns(conversationId).drop(index + 1))
     }
 
     /** Deletes the conversation and its turns. */

@@ -89,6 +89,8 @@ class ChatControllerTest {
                 emit(ReplyChunk.Text(summaryText))
                 return@flow
             }
+            // Photo captions answer nothing here, so none is kept (ModelSwapTest covers them).
+            if (messages.last().content == PhotoCaptions.PROMPT) return@flow
             sent = messages
             sentParams = params
             chats++
