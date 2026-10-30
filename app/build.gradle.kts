@@ -95,6 +95,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // Documents: PDF text layer, and on-device OCR for scanned pages (bundled Latin model, offline).
+    implementation(libs.pdfbox.android)
+    implementation(libs.mlkit.text.recognition)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
