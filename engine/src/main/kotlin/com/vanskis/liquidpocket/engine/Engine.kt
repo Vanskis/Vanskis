@@ -28,7 +28,8 @@ interface Engine {
      * and tool turns, oldest first, ending with a user or tool turn). The engine reuses its cache
      * for a prefix it has already processed, so passing the full history each turn is cheap.
      *
-     * Emits [ReplyChunk.Text] as text is generated, [ReplyChunk.Audio] when [GenerationParams.speak]
+     * Emits [ReplyChunk.Thinking] as the model reasons before answering (models that think, see
+     * [GenerationParams.think]), [ReplyChunk.Text] as the answer is generated, [ReplyChunk.Audio] when [GenerationParams.speak]
      * is set and the model speaks, and [ReplyChunk.ToolCall] for each tool call parsed once the reply
      * ends. Completes when the reply ends or [stop] is called. Images and audio on a message require
      * the matching capability, otherwise the flow fails with [EngineException].
@@ -37,6 +38,15 @@ interface Engine {
 
     /** Ends the current reply early; the text streamed so far stays valid. */
     fun stop()
+
+    /**
+     * Tokens [messages] take as the prompt of a [chat] with [params] (tools and [GenerationParams.think]
+     * change the rendering), including the assistant generation prompt; media counts without being
+     * processed. Waits for a running reply or load. Throws [EngineException] without a loaded model or
+     * if the conversation cannot be rendered.
+     */
+    suspend fun countTokens(messages: List<ChatMessage>, params: GenerationParams = GenerationParams()): Int =
+        throw UnsupportedOperationException("countTokens is not implemented by ${javaClass.simpleName}")
 }
 
 data class EngineConfig(
@@ -53,6 +63,11 @@ data class GenerationParams(
     val tools: List<ToolSpec> = emptyList(),
     /** Ask the model to answer in speech as well as text (needs [Capabilities.audioOut]). */
     val speak: Boolean = false,
+    /**
+     * Let a model that thinks reason before answering (the template's `enable_thinking`); its
+     * reasoning streams as [ReplyChunk.Thinking]. Ignored by models without thinking.
+     */
+    val think: Boolean = true,
 )
 
 data class Capabilities(
@@ -103,6 +118,9 @@ data class ToolCall(val name: String, val argumentsJson: String)
 sealed interface ReplyChunk {
     data class Text(val text: String) : ReplyChunk
 
+    /** Reasoning the model does before its answer; never part of [Text]. */
+    data class Thinking(val text: String) : ReplyChunk
+
     /** Mono PCM float samples at [Capabilities.audioOutSampleRate]. */
     class Audio(val samples: FloatArray) : ReplyChunk
 
@@ -114,6 +132,10 @@ data class GenerationStats(
     val prefillTokensPerSecond: Double,
     val generatedTokens: Int,
     val decodeTokensPerSecond: Double,
+    /** Of [generatedTokens], those spent inside the think block. */
+    val thinkingTokens: Int = 0,
+    /** Milliseconds from the start of the reply to its first [ReplyChunk.Text] or [ReplyChunk.Thinking]; null if none came. */
+    val timeToFirstTokenMs: Long? = null,
 )
 
 sealed interface EngineState {

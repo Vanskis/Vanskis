@@ -8,6 +8,8 @@ package com.vanskis.liquidpocket.engine
  * a long time and must not block garbage collection.
  *
  * A conversation is passed as the arrays of a [NativePrompt], in its field order (`<prompt>` below).
+ * `think` is the template's `enable_thinking` ([GenerationParams.think]); the functions that render a
+ * conversation must get the same value for the same reply.
  */
 internal object LlamaNative {
     const val ROLE_SYSTEM = 0
@@ -53,6 +55,7 @@ internal object LlamaNative {
         mediaDims: IntArray,
         mediaData: Array<Any?>,
         tools: Array<ByteArray>,
+        think: Boolean,
     ): Int
 
     /**
@@ -71,11 +74,13 @@ internal object LlamaNative {
         tools: Array<ByteArray>,
         temperature: Float,
         speak: Boolean,
+        think: Boolean,
     ): IntArray
 
     /**
      * The markers the streamed reply text must be filtered on (see [ReplyFilter]), as UTF-8:
-     * `[[thinkStart] or [], thinkEnds, toolStarts]`.
+     * `[[thinkStart] or [], thinkEnds, toolStarts, [thinkStart] or []]`; the last is non-empty when the
+     * generation prompt already opens the think block (the reply starts inside it).
      */
     external fun nativeReplyMarkers(
         roles: IntArray,
@@ -83,6 +88,7 @@ internal object LlamaNative {
         toolNames: Array<ByteArray>,
         toolCalls: Array<Array<ByteArray>>,
         tools: Array<ByteArray>,
+        think: Boolean,
     ): Array<Array<ByteArray>>
 
     /**
