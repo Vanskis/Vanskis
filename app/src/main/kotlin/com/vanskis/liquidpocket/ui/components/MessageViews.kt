@@ -34,17 +34,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.mikepenz.markdown.m3.Markdown
-import com.mikepenz.markdown.m3.markdownColor
-import com.mikepenz.markdown.m3.markdownTypography
-import com.mikepenz.markdown.model.rememberMarkdownState
 import com.vanskis.liquidpocket.chat.Attachment
 import com.vanskis.liquidpocket.engine.GenerationStats
-import java.util.Locale
 
-/** The user's message, right-aligned in a bubble under its [attachments]. [onEdit] and [onRetry] show only when given. */
+/** The user's message, right-aligned in a soft bubble under its [attachments]. [onEdit] and [onRetry] show only when given. */
 @Composable
 fun UserMessage(
     text: String,
@@ -53,18 +47,18 @@ fun UserMessage(
     onEdit: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
 ) {
-    Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+    Column(modifier = modifier.fillMaxWidth().padding(start = 48.dp), horizontalAlignment = Alignment.End) {
         if (attachments.isNotEmpty()) {
             MessageAttachments(attachments, modifier = Modifier.padding(bottom = if (text.isEmpty()) 0.dp else 4.dp))
         }
         if (text.isNotEmpty()) Surface(
-            shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 6.dp, bottomEnd = 24.dp, bottomStart = 24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.widthIn(max = 340.dp),
         ) {
             SelectionContainer {
-                Text(text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+                Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
             }
         }
         if (onEdit != null || onRetry != null) {
@@ -77,8 +71,11 @@ fun UserMessage(
 }
 
 /**
- * The model's reply, full width, rendered as Markdown. While [streaming] with no text yet it shows the
- * typing indicator. Copy shows once the reply is complete; [onRegenerate] and [onThinkHarder] only when given.
+ * The model's reply: the sparkle mark, then full-width Markdown with no bubble, like Gemini. Above
+ * it, the model's [thinking] when it gives one (see [ThinkingSection]). While [streaming] with no
+ * text yet it shows the typing indicator. Copy shows once the reply is complete; [onRegenerate] and
+ * [onThinkHarder] only when given, [stats] ("23 tok/s · 0.4 s to first token") when given.
+ * [onCopy] copies the whole reply, [onCopyCode] one code block.
  */
 @Composable
 fun AssistantMessage(
@@ -87,67 +84,46 @@ fun AssistantMessage(
     stats: GenerationStats?,
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
+    onCopyCode: (String) -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
     onThinkHarder: (() -> Unit)? = null,
     thinkHarderEnabled: Boolean = true,
+    thinking: String? = null,
+    thinkingSeconds: Int? = null,
 ) {
-    Column(modifier = modifier.fillMaxWidth().padding(end = 8.dp)) {
-        if (text.isEmpty() && streaming) {
-            TypingIndicator(modifier = Modifier.padding(vertical = 12.dp))
-        } else {
-            // retainState keeps the last rendering on screen while each streamed token is re-parsed.
-            val markdown = rememberMarkdownState(text, retainState = true)
-            val colors = MaterialTheme.colorScheme
-            val type = MaterialTheme.typography
-            SelectionContainer {
-                Markdown(
-                    markdownState = markdown,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = markdownColor(
-                        text = colors.onSurface,
-                        codeBackground = colors.surfaceContainerHighest,
-                        inlineCodeBackground = colors.surfaceContainerHigh,
-                        dividerColor = colors.outlineVariant,
-                        tableBackground = colors.surfaceContainerLow,
-                    ),
-                    typography = markdownTypography(
-                        h1 = type.titleLarge,
-                        h2 = type.titleMedium,
-                        h3 = type.titleSmall,
-                        h4 = type.titleSmall,
-                        h5 = type.titleSmall,
-                        h6 = type.titleSmall,
-                        text = type.bodyLarge,
-                        code = type.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        inlineCode = type.bodyLarge.copy(fontFamily = FontFamily.Monospace),
-                        paragraph = type.bodyLarge,
-                        ordered = type.bodyLarge,
-                        bullet = type.bodyLarge,
-                        list = type.bodyLarge,
-                    ),
-                )
+    Row(modifier = modifier.fillMaxWidth()) {
+        AssistantMark(busy = streaming, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            // Still thinking while it streams and no reply text has come yet.
+            ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty())
+            if (text.isEmpty() && streaming) {
+                if (thinking == null) TypingIndicator(modifier = Modifier.padding(vertical = 8.dp))
+            } else {
+                SelectionContainer {
+                    MarkdownReply(text, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth())
+                }
             }
-        }
-        if (!streaming) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                MessageAction(AppIcons.ContentCopy, "Copy", onCopy)
-                onRegenerate?.let { MessageAction(Icons.Filled.Refresh, "Regenerate", it) }
-                onThinkHarder?.let {
-                    TextButton(onClick = it, enabled = thinkHarderEnabled, modifier = Modifier.height(36.dp)) {
-                        Text("Think harder", style = MaterialTheme.typography.labelLarge)
+            if (!streaming) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                    MessageAction(AppIcons.ContentCopy, "Copy", onCopy)
+                    onRegenerate?.let { MessageAction(Icons.Filled.Refresh, "Regenerate", it) }
+                    onThinkHarder?.let {
+                        TextButton(onClick = it, enabled = thinkHarderEnabled, modifier = Modifier.height(36.dp)) {
+                            Text("Think harder", style = MaterialTheme.typography.labelLarge)
+                        }
                     }
                 }
-                stats?.let { StatsLine(it, modifier = Modifier.padding(start = 4.dp)) }
+                stats?.let { StatsLine(it, modifier = Modifier.padding(start = 10.dp)) }
             }
         }
     }
 }
 
-/** "24.5 tok/s · 312 tokens" under a reply. */
+/** "23 tok/s · 0.4 s to first token" under the newest reply. */
 @Composable
 fun StatsLine(stats: GenerationStats, modifier: Modifier = Modifier) {
     Text(
-        String.format(Locale.ROOT, "%.1f tok/s · %d tokens", stats.decodeTokensPerSecond, stats.generatedTokens),
+        statsSummary(stats),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,
@@ -174,7 +150,7 @@ fun TypingIndicator(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .size(8.dp)
                     .alpha(alpha)
-                    .background(MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+                    .background(Accent.colors[i], CircleShape),
             )
         }
     }

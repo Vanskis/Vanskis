@@ -97,6 +97,14 @@ object AppIcons {
         )
     }
 
+    /** A four-pointed star: the assistant's mark beside its replies. */
+    val Sparkle: ImageVector by lazy {
+        fromPath(
+            "Sparkle",
+            "M12,2C12.6,7.3 16.7,11.4 22,12C16.7,12.6 12.6,16.7 12,22C11.4,16.7 7.3,12.6 2,12C7.3,11.4 11.4,7.3 12,2z",
+        )
+    }
+
     private fun fromPath(name: String, pathData: String): ImageVector =
         materialIcon(name = name) { addPath(pathData = addPathNodes(pathData), fill = SolidColor(Color.Black)) }
 }
