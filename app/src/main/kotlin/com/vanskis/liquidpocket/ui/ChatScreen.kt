@@ -117,6 +117,26 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
         if (granted) vm.startLive() else askMicForLive.launch(Manifest.permission.RECORD_AUDIO)
     }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.stopLive() }
+    val cameraGranted = {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    }
+    val startCapture = {
+        val (file, uri) = vm.newCameraCapture()
+        capturePath = file.path
+        try {
+            takePhoto.launch(uri)
+        } catch (e: ActivityNotFoundException) {
+            capturePath = null
+            vm.onCameraResult(file.path, taken = false)
+            vm.showError("No camera app is available.")
+        }
+    }
+    val askCameraForPhoto = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startCapture() else vm.showError("Taking a photo needs the camera. You can allow it in the app's settings.")
+    }
+    val askCameraForLive = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.toggleLiveCamera() else vm.showError("The camera needs permission. You can allow it in the app's settings.")
+    }
 
     // The widget's mic button opens a new chat listening, its Ask one with the keyboard up (access/LaunchRequest.kt).
     val launch by vm.launch.collectAsStateWithLifecycle()
@@ -152,16 +172,9 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
         },
         onPickDocument = { pickDocument.launch(arrayOf("application/pdf", "text/*")) },
         focusRequester = focusRequester,
+        // With the CAMERA permission declared (live voice), the camera app also needs it granted.
         onTakePhoto = if (!hasCamera) null else fun() {
-            val (file, uri) = vm.newCameraCapture()
-            capturePath = file.path
-            try {
-                takePhoto.launch(uri)
-            } catch (e: ActivityNotFoundException) {
-                capturePath = null
-                vm.onCameraResult(file.path, taken = false)
-                vm.showError("No camera app is available.")
-            }
+            if (cameraGranted()) startCapture() else askCameraForPhoto.launch(Manifest.permission.CAMERA)
         },
         onMic = onMic,
         recordingMillis = recordingMillis,
@@ -179,6 +192,12 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
                 live = ui,
                 modelName = if (ui.model == LiveVoiceModel.OMNI) MEDIA_MODEL.displayName else ACTIVE_MODEL.displayName,
                 onClose = { vm.stopLive() },
+                // Omni sees; Android's recognizer and 1.7B do not.
+                onToggleCamera = if (ui.model != LiveVoiceModel.OMNI || !hasCamera) null else fun() {
+                    if (ui.camera != null || cameraGranted()) vm.toggleLiveCamera() else askCameraForLive.launch(Manifest.permission.CAMERA)
+                },
+                onFlipCamera = vm::flipLiveCamera,
+                preview = { lens, modifier -> LiveCameraPreview(lens, vm::setLiveFrameSource, modifier) },
             )
         }
     }

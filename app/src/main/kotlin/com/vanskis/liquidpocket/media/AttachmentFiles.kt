@@ -1,8 +1,10 @@
 package com.vanskis.liquidpocket.media
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.core.content.FileProvider
+import com.vanskis.liquidpocket.chat.LiveCamera
 import java.io.File
 import java.io.IOException
 import java.util.UUID
@@ -42,6 +44,15 @@ class AttachmentFiles(context: Context) {
             capture.copyTo(target)
             capture.delete()
         }
+        return target
+    }
+
+    /** Writes a live camera frame as a JPEG, shrunk to [LiveCamera.FRAME_MAX_SIDE]. Blocks. */
+    fun saveFrame(frame: Bitmap): File {
+        val (w, h) = LiveCamera.fit(frame.width, frame.height)
+        val scaled = if (w == frame.width && h == frame.height) frame else Bitmap.createScaledBitmap(frame, w, h, true)
+        val target = File(dir, "img-${UUID.randomUUID()}.jpg")
+        target.outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }
         return target
     }
 

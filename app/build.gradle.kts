@@ -86,6 +86,9 @@ dependencies {
     implementation(libs.markdown.renderer.m3)
     // The calculate tool's isolated JavaScript sandbox, for math.js (assets/mathjs).
     implementation(libs.androidx.javascriptengine)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation(libs.jlatexmath.android)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)

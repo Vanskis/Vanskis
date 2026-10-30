@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Voice messages and dictation; asked for the first time the mic is used. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Live voice can show Omni what the camera sees. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Android's speech recognizer and text-to-speech, the voice fallback. -->
     <queries>

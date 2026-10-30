@@ -326,7 +326,27 @@ class LiveUnsent {
 }
 
 /** What the live voice screen shows: the phase, the mic level (0..1) for the orb, and the model. */
-data class LiveUi(val phase: LivePhase, val level: Float, val model: LiveVoiceModel)
+/** [camera] is the lens the model sees through, null with the camera off. */
+data class LiveUi(val phase: LivePhase, val level: Float, val model: LiveVoiceModel, val camera: LiveCamera? = null)
+
+/** The camera live voice shows the model: one frame goes with each turn, taken when the user stops talking. */
+enum class LiveCamera {
+    BACK, FRONT;
+
+    val flipped: LiveCamera get() = if (this == BACK) FRONT else BACK
+
+    companion object {
+        /** Longest side of a frame sent to the model: enough to read a label, small to encode. */
+        const val FRAME_MAX_SIDE = 768
+
+        /** [width] x [height] shrunk to fit [max] on its longer side, keeping the shape; never enlarged. */
+        fun fit(width: Int, height: Int, max: Int = FRAME_MAX_SIDE): Pair<Int, Int> {
+            val longer = maxOf(width, height)
+            if (longer <= max) return width to height
+            return maxOf(1, width * max / longer) to maxOf(1, height * max / longer)
+        }
+    }
+}
 
 object LiveLevel {
     /** An RMS (0..1 of full scale) as 0..1 for the orb: -50 dBFS and below is 0, -10 dBFS and above is 1. */

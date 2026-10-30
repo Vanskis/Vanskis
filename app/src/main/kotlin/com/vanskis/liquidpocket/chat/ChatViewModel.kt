@@ -3,6 +3,7 @@ package com.vanskis.liquidpocket.chat
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
 import androidx.annotation.RequiresPermission
@@ -522,6 +523,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private var liveReply: String? = null
     private var liveAudio = false
     private val _live = MutableStateFlow<LiveUi?>(null)
+    /** The live camera preview's current frame, set while it is showing. Main thread. */
+    private var liveFrame: (() -> Bitmap?)? = null
 
     /** The live voice screen's state; null when it is closed. */
     val live: StateFlow<LiveUi?> = _live.asStateFlow()
@@ -592,6 +595,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         _live.value = null
     }
 
+    /** Turns the camera on (back lens first) or off. The screen asks for the camera permission first. */
+    fun toggleLiveCamera() = _live.update { it?.copy(camera = if (it.camera == null) LiveCamera.BACK else null) }
+
+    fun flipLiveCamera() = _live.update { ui -> ui?.copy(camera = ui.camera?.flipped) }
+
+    /** Set by the preview once it shows frames, null when it goes. */
+    fun setLiveFrameSource(source: (() -> Bitmap?)?) {
+        liveFrame = source
+    }
+
     private fun liveEvent(event: LiveEvent) {
         val turns = liveTurns ?: return
         for (action in turns.on(event)) {
@@ -631,18 +644,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         val model = liveModel
         val heard = if (model == LiveVoiceModel.OMNI) liveCapture?.takeTurn() ?: FloatArray(0) else FloatArray(0)
         val (text, clip) = liveUnsent.take(if (model == LiveVoiceModel.TEXT) liveTranscript.orEmpty() else "", heard)
+        // What the camera sees as the user stops talking.
+        val frame = if (_live.value?.camera != null) liveFrame?.invoke() else null
         liveTranscript = null
         liveSend?.cancel()
         liveSend = viewModelScope.launch {
-            var file: File? = null
+            val saved = mutableListOf<File>()
             var sent = false
             try {
-                val attachments = if (clip.isEmpty()) {
-                    emptyList()
-                } else {
-                    val saved = withContext(Dispatchers.IO) { files.saveVoice(clip, VoiceRoute.RECORD_SAMPLE_RATE) }
-                    file = saved
-                    listOf(Attachment(saved.path, AttachmentKind.AUDIO))
+                val attachments = mutableListOf<Attachment>()
+                if (frame != null) {
+                    val image = withContext(Dispatchers.IO) { files.saveFrame(frame) }
+                    saved += image
+                    attachments += Attachment(image.path, AttachmentKind.IMAGE)
+                }
+                if (clip.isNotEmpty()) {
+                    val voice = withContext(Dispatchers.IO) { files.saveVoice(clip, VoiceRoute.RECORD_SAMPLE_RATE) }
+                    saved += voice
+                    attachments += Attachment(voice.path, AttachmentKind.AUDIO)
                 }
                 // A reply the user talked over may still be wrapping up.
                 withTimeoutOrNull(LIVE_SEND_WAIT_MS) { controller.state.first { !it.busy } }
@@ -653,8 +672,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
             } catch (e: Exception) {
                 controller.showError("Could not send the voice message: ${e.message ?: e.javaClass.simpleName}")
             } finally {
-                val unsent = file?.takeIf { !sent }
-                if (unsent != null) viewModelScope.launch(Dispatchers.IO) { files.delete(unsent.path) }
+                if (!sent && saved.isNotEmpty()) viewModelScope.launch(Dispatchers.IO) { saved.forEach { files.delete(it.path) } }
             }
             // Sent, or dropped for good: either way it does not go with the next turn.
             liveUnsent.clear()

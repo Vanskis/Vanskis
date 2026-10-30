@@ -164,4 +164,12 @@ class LiveVoiceTest {
         assertEquals(0.5f, LiveLevel.fromRms(0.0316228f), 1e-3f)
         assertEquals(1f, LiveLevel.fromRms(0.5f), 0f)
     }
+
+    @Test fun `a camera frame shrinks to fit 768 on its longer side and keeps its shape`() {
+        assertEquals(768 to 576, LiveCamera.fit(4000, 3000))
+        assertEquals(432 to 768, LiveCamera.fit(1080, 1920))
+        assertEquals(640 to 480, LiveCamera.fit(640, 480))
+        assertEquals(LiveCamera.FRONT, LiveCamera.BACK.flipped)
+        assertEquals(LiveCamera.BACK, LiveCamera.FRONT.flipped)
+    }
 }

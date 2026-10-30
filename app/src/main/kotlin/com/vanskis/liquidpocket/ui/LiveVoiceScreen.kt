@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,15 +28,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.chat.LiveCamera
 import com.vanskis.liquidpocket.chat.LivePhase
 import com.vanskis.liquidpocket.chat.LiveUi
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
+import com.vanskis.liquidpocket.ui.components.AppIcons
 import com.vanskis.liquidpocket.ui.components.LocalAppStyle
 import kotlin.math.PI
 import kotlin.math.sin
@@ -41,14 +47,43 @@ import kotlin.math.sin
 /**
  * The full-screen live voice conversation: an orb that follows the mic while listening, turns while
  * the reply is coming and ripples while it is spoken, a caption, and a close button. It covers the
- * chat (and takes its touches); the turns still land in the chat underneath.
+ * chat (and takes its touches); the turns still land in the chat underneath. With [onToggleCamera]
+ * (the model can see), a camera button shows [preview] small in a corner, with a button to flip lens.
  */
 @Composable
-fun LiveVoiceScreen(live: LiveUi, modelName: String, onClose: () -> Unit) {
+fun LiveVoiceScreen(
+    live: LiveUi,
+    modelName: String,
+    onClose: () -> Unit,
+    onToggleCamera: (() -> Unit)? = null,
+    onFlipCamera: () -> Unit = {},
+    preview: @Composable (LiveCamera, Modifier) -> Unit = { _, _ -> },
+) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
             FilledTonalIconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
                 Icon(Icons.Filled.Close, contentDescription = "End live voice")
+            }
+            live.camera?.let { lens ->
+                Box(modifier = Modifier.align(Alignment.TopStart).padding(16.dp)) {
+                    preview(lens, Modifier.size(width = 120.dp, height = 160.dp).clip(RoundedCornerShape(16.dp)))
+                    FilledTonalIconButton(
+                        onClick = onFlipCamera,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(36.dp),
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Switch camera")
+                    }
+                }
+            }
+            onToggleCamera?.let { toggle ->
+                val on = live.camera != null
+                FilledTonalIconToggleButton(
+                    checked = on,
+                    onCheckedChange = { toggle() },
+                    modifier = Modifier.align(Alignment.BottomStart).padding(24.dp),
+                ) {
+                    Icon(AppIcons.PhotoCamera, contentDescription = if (on) "Turn camera off" else "Let the model see")
+                }
             }
             Column(
                 modifier = Modifier.align(Alignment.Center),
