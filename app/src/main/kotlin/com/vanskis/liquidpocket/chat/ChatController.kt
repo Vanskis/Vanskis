@@ -1,6 +1,7 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
@@ -81,6 +82,7 @@ const val MAX_TOOL_ROUNDS = 5
  * photos or voice, the text model otherwise, loaded in place of the current one if need be. Nothing
  * is swapped back after a reply; the next reply routes again. [clock] times the model's thinking.
  * [customInstructions] (the user's, from Settings) is read for each reply's system prompt.
+ * [accelerator] (also from Settings) is read for each load; a change reloads the model on the next turn.
  */
 class ChatController(
     private val engine: Engine,
@@ -93,6 +95,7 @@ class ChatController(
     private val models: ModelTargets = ModelTargets.NONE,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val customInstructions: () -> String = { "" },
+    private val accelerator: () -> Accelerator = { Accelerator.CPU },
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -111,8 +114,11 @@ class ChatController(
     /** The [ToolConfirmation.id] of the newest card. */
     private var lastConfirmationId = 0L
 
-    /** The request behind the engine's current model, as the engine may clamp the context size. */
-    private var loadedFor: Pair<String, Int>? = null
+    /**
+     * The request behind the engine's current model, as the engine may clamp the context size and
+     * fall back from the NPU to the CPU.
+     */
+    private var loadedFor: Triple<String, Int, Accelerator>? = null
 
     /** Lets a model that thinks reason before answering ([GenerationParams.think]); [thinkHarder] always does. */
     var think: Boolean = true
@@ -151,9 +157,10 @@ class ChatController(
     private suspend fun load(target: LoadTarget): Boolean = loadMutex.withLock {
         if (isLoaded(target)) return@withLock true
         _state.update { it.copy(loading = true) }
+        val accelerator = accelerator()
         try {
-            withContext(work) { engine.load(target.path, EngineConfig(target.contextSize, target.mmprojPath)) }
-            loadedFor = target.path to target.contextSize
+            withContext(work) { engine.load(target.path, EngineConfig(target.contextSize, target.mmprojPath, accelerator)) }
+            loadedFor = Triple(target.path, target.contextSize, accelerator)
             true
         } catch (e: CancellationException) {
             throw e
@@ -167,10 +174,10 @@ class ChatController(
     }
 
     private fun isLoaded(target: LoadTarget): Boolean {
-        val request = target.path to target.contextSize
+        val request = Triple(target.path, target.contextSize, accelerator())
         return when (val current = engine.state.value) {
-            is EngineState.Ready -> current.modelPath == target.path &&
-                (current.contextSize == ContextSize.clamp(target.contextSize) || loadedFor == request)
+            is EngineState.Ready -> current.modelPath == target.path && (loadedFor == request ||
+                current.contextSize == ContextSize.clamp(target.contextSize) && current.accelerator == request.third)
             EngineState.Generating -> loadedFor == request
             else -> false
         }

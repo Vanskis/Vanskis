@@ -15,6 +15,7 @@ import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.access.LaunchRequest
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
+import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
 import com.vanskis.liquidpocket.media.Dictation
@@ -77,6 +78,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val controller = ChatController(
         graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media, sink = sink, models = models,
         customInstructions = { settings.value.customInstructions },
+        accelerator = { if (settings.value.useNpu) Accelerator.NPU else Accelerator.CPU },
     )
 
     val state: StateFlow<ChatState> = controller.state
