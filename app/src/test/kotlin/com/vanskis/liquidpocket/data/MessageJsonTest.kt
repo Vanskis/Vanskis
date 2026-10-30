@@ -19,6 +19,15 @@ class MessageJsonTest {
         assertEquals(emptyList<Attachment>(), MessageJson.decodeAttachments(null))
     }
 
+    @Test fun `a document attachment round-trips with its name, and older rows decode without one`() {
+        val doc = listOf(Attachment("0f8fad5b-d9cb-469f-a165-70867728950e", AttachmentKind.DOCUMENT, "report \"Q3\".pdf"))
+        assertEquals(doc, MessageJson.decodeAttachments(MessageJson.encodeAttachments(doc)))
+        assertEquals(
+            listOf(Attachment("/a/p.jpg", AttachmentKind.IMAGE)),
+            MessageJson.decodeAttachments("""[{"path": "/a/p.jpg", "kind": "IMAGE"}]"""),
+        )
+    }
+
     @Test fun `tool calls keep their arguments text as is`() {
         val calls = listOf(ToolCall("get_weather", """{"city": "Lyon", "days": 2}"""))
         assertEquals(calls, MessageJson.decodeToolCalls(MessageJson.encodeToolCalls(calls)))

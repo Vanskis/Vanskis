@@ -6,7 +6,7 @@ import com.vanskis.liquidpocket.engine.Role
 object ChatExport {
     /**
      * `# title`, then a `**You:**` or `**Assistant:**` section per turn, in order. A tool turn is one
-     * italic line, attachments are `[photo]` / `[voice message]`. System turns and the turns the app
+     * italic line, attachments are `[photo]` / `[voice message]` / `[document: name]`. System turns and the turns the app
      * wrote to hand the model a tool's photos are left out; the model's thinking is not saved with
      * a turn, so it never appears.
      */
@@ -18,9 +18,7 @@ object ChatExport {
                 turn.role == Role.TOOL -> "_Used tool: ${turn.toolName ?: "tool"}_"
                 else -> {
                     val label = if (turn.role == Role.USER) "**You:**" else "**Assistant:**"
-                    val marks = turn.attachments.joinToString(" ") {
-                        if (it.kind == AttachmentKind.IMAGE) "[photo]" else "[voice message]"
-                    }
+                    val marks = turn.attachments.joinToString(" ") { it.mark() }
                     val body = listOf(marks, turn.text.trim()).filter { it.isNotEmpty() }.joinToString("\n\n")
                     if (body.isEmpty()) null else "$label\n\n$body"
                 }
@@ -29,6 +27,13 @@ object ChatExport {
         }
         return sections.joinToString("\n\n") + "\n"
     }
+}
+
+/** How an attachment shows in a transcript: `[photo]`, `[voice message]` or `[document: name]`. */
+internal fun Attachment.mark(): String = when (kind) {
+    AttachmentKind.IMAGE -> "[photo]"
+    AttachmentKind.AUDIO -> "[voice message]"
+    AttachmentKind.DOCUMENT -> "[document: ${name ?: "document"}]"
 }
 
 /** A conversation found by search; [snippet] is text around the first matching message, null if only the title matched. */

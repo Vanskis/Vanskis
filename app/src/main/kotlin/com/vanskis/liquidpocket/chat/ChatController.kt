@@ -1,6 +1,7 @@
 package com.vanskis.liquidpocket.chat
 
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.docs.DocumentContext
 import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
@@ -87,10 +88,11 @@ const val MAX_TOOL_ROUNDS = 5
  *
  * [work] runs model loading, the token stream and tools off the caller's (main) thread. Each
  * operation that touches [store] waits for the previous one, so writes land in the order they were made.
- * [media] decodes attachments for the engine; [sink] gets the reply's speech and its end.
+ * [media] decodes attachments for the engine and [documents] reads attached documents back, whose
+ * relevant passages go in front of the user's text; [sink] gets the reply's speech and its end.
  *
  * Each reply is routed through [models] ([route]): the media model when the newest user turn has
- * photos or voice, the text model otherwise, loaded in place of the current one if need be. Nothing
+ * photos or voice (documents are text and do not count), the text model otherwise, loaded in place of the current one if need be. Nothing
  * is swapped back after a reply; the next reply routes again. [clock] times the model's thinking.
  * [customInstructions] (the user's, from Settings) is read for each reply's system prompt.
  *
@@ -106,6 +108,7 @@ class ChatController(
     private val work: CoroutineDispatcher,
     private val tools: List<Tool> = emptyList(),
     private val media: MediaLoader = MediaLoader.NONE,
+    private val documents: DocumentLoader = DocumentLoader.NONE,
     private val sink: ReplySink = ReplySink.NONE,
     private val models: ModelTargets = ModelTargets.NONE,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
@@ -168,7 +171,8 @@ class ChatController(
     /** The model for a reply to [turns], see [ModelTargets.route]; [textOnly] routes as if nothing was attached. */
     private suspend fun route(turns: List<Turn>, textOnly: Boolean): LoadTarget? {
         val newestUser = turns.lastOrNull { it.role == Role.USER && !it.fromTool }
-        return models.route(hasMedia = !textOnly && newestUser?.attachments.orEmpty().isNotEmpty())
+        val hasMedia = newestUser?.attachments.orEmpty().any { it.kind == AttachmentKind.IMAGE || it.kind == AttachmentKind.AUDIO }
+        return models.route(hasMedia = !textOnly && hasMedia)
     }
 
     /** Loads [target] unless it is loaded already; false when loading failed (the error is shown). */
@@ -642,18 +646,20 @@ class ChatController(
             null
         }
 
-    /** Names a conversation that starts with only a photo or a voice message. */
+    /** Names a conversation that starts with only a photo, a voice message or a document. */
     private fun Turn.titleText(): String = text.ifBlank {
         when (attachments.firstOrNull()?.kind) {
             AttachmentKind.IMAGE -> "Photo"
             AttachmentKind.AUDIO -> "Voice message"
+            AttachmentKind.DOCUMENT -> attachments.first().name ?: "Document"
             null -> text
         }
     }
 
     /**
      * A user turn's attachments become decoded images and audio the model takes; media it cannot
-     * take, or whose file is gone, becomes a note in the text so the engine is never given it.
+     * take, or whose file is gone, becomes a note in the text so the engine is never given it. A
+     * document becomes the passages relevant to the turn's text ([DocumentContext]), in front of it.
      */
     private fun Turn.toMessage(caps: Capabilities): ChatMessage {
         // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
@@ -671,6 +677,7 @@ class ChatController(
         val images = mutableListOf<ImageInput>()
         val audio = mutableListOf<AudioInput>()
         val notes = mutableListOf<String>()
+        val docs = mutableListOf<String>()
         for (attachment in attachments) {
             when (attachment.kind) {
                 AttachmentKind.IMAGE -> when {
@@ -682,9 +689,11 @@ class ChatController(
                     else -> loadOrNull { media.audio(attachment.path, caps.audioInSampleRate) }?.let { audio += it }
                         ?: run { notes += MediaNotes.AUDIO_MISSING }
                 }
+                AttachmentKind.DOCUMENT -> loadOrNull { documents.document(attachment.path) }
+                    ?.let { docs += DocumentContext.forQuestion(it, text) } ?: run { notes += MediaNotes.DOCUMENT_MISSING }
             }
         }
-        val content = (listOf(text) + notes.distinct()).filter { it.isNotBlank() }.joinToString("\n\n")
+        val content = (docs + text + notes.distinct()).filter { it.isNotBlank() }.joinToString("\n\n")
         return ChatMessage(role, content, images = images, audio = audio)
     }
 

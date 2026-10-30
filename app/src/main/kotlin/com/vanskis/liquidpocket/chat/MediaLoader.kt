@@ -65,4 +65,5 @@ object MediaNotes {
     const val AUDIO_UNSUPPORTED = "[The user attached a voice message, but the current model cannot hear audio.]"
     const val IMAGE_MISSING = "[The user attached an image that is no longer available.]"
     const val AUDIO_MISSING = "[The user attached a voice message that is no longer available.]"
+    const val DOCUMENT_MISSING = "[The user attached a document that is no longer available.]"
 }

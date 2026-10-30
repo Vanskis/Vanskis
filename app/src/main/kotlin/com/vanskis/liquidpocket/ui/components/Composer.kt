@@ -32,23 +32,27 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.access.SharedDocument
 import com.vanskis.liquidpocket.chat.Attachment
 
 /**
- * The message pill at the bottom, like Gemini's: + (photo menu), the field, mic, the context ring
- * and Send (Stop while a reply streams).
+ * The message pill at the bottom, like Gemini's: + (photo and document menu), the field, mic, the
+ * context ring and Send (Stop while a reply streams).
  *
- * The + menu shows when [onPickPhoto] or [onTakePhoto] is given, the mic when [onMic] is; both
+ * The + menu shows when [onPickPhoto], [onTakePhoto] or [onPickDocument] is given, the mic when [onMic] is; both
  * are disabled unless [attachEnabled] (the mic's stop stays live while it records). The
  * [ContextRing] shows once [contextTotal] is known; its Compact now runs [onCompact], disabled when
- * that is null. [pending] attachments show above the field, each with a remove button. The Think
- * chip (selected when [think]) shows when [onToggleThink] is given.
+ * that is null. [pending] attachments show above the field, each with a remove button, then the
+ * documents still [extracting]; [shared] documents show as chips above the pill. The Think chip
+ * (selected when [think]) shows when [onToggleThink] is given. [focusRequester] is attached to the field.
  */
 @Composable
 fun Composer(
@@ -63,9 +67,15 @@ fun Composer(
     onCancelEdit: () -> Unit = {},
     pending: List<Attachment> = emptyList(),
     onRemovePending: (Attachment) -> Unit = {},
+    extracting: List<DocumentExtraction> = emptyList(),
+    onCancelExtraction: (DocumentExtraction) -> Unit = {},
+    shared: List<SharedDocument> = emptyList(),
+    onUseShared: (SharedDocument) -> Unit = {},
     attachEnabled: Boolean = true,
     onPickPhoto: (() -> Unit)? = null,
     onTakePhoto: (() -> Unit)? = null,
+    onPickDocument: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null,
     onMic: (() -> Unit)? = null,
     recordingMillis: Long? = null,
     contextUsed: Int = 0,
@@ -83,6 +93,7 @@ fun Composer(
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp),
     ) {
+        if (shared.isNotEmpty()) SharedDocumentChips(shared, onUseShared, modifier = Modifier.padding(bottom = 4.dp))
         Surface(shape = RoundedCornerShape(28.dp), color = colors.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
                 if (editing) {
@@ -101,22 +112,29 @@ fun Composer(
                         TextButton(onClick = onCancelEdit) { Text("Cancel") }
                     }
                 }
-                if (pending.isNotEmpty()) {
-                    PendingAttachments(pending, onRemovePending, modifier = Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp))
+                if (pending.isNotEmpty() || extracting.isNotEmpty()) {
+                    PendingAttachments(
+                        pending,
+                        onRemovePending,
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp),
+                        extracting = extracting,
+                        onCancelExtraction = onCancelExtraction,
+                    )
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    if (onPickPhoto != null || onTakePhoto != null) {
+                    if (onPickPhoto != null || onTakePhoto != null || onPickDocument != null) {
                         AttachMenuButton(
                             enabled = attachEnabled && recordingMillis == null,
                             onPickPhoto = onPickPhoto,
                             onTakePhoto = onTakePhoto,
                             modifier = Modifier.padding(bottom = 4.dp),
+                            onPickDocument = onPickDocument,
                         )
                     }
                     TextField(
                         value = value,
                         onValueChange = onValueChange,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
                         placeholder = { Text("Ask Liquid Pocket") },
                         minLines = 1,
                         maxLines = 6,

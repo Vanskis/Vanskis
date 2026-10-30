@@ -19,14 +19,18 @@ import kotlinx.serialization.json.put
  * An empty list is stored as null.
  */
 object MessageJson {
-    /** `[{"path": "...", "kind": "IMAGE"|"AUDIO"}, ...]` */
+    /** `[{"path": "...", "kind": "IMAGE"|"AUDIO"|"DOCUMENT", "name": "..."}, ...]`, `name` left out when null. */
     fun encodeAttachments(attachments: List<Attachment>): String? =
         if (attachments.isEmpty()) null else buildJsonArray {
-            attachments.forEach { add(buildJsonObject { put("path", it.path); put("kind", it.kind.name) }) }
+            attachments.forEach { a ->
+                add(buildJsonObject { put("path", a.path); put("kind", a.kind.name); a.name?.let { put("name", it) } })
+            }
         }.toString()
 
     fun decodeAttachments(json: String?): List<Attachment> =
-        objects(json).map { Attachment(it.string("path"), AttachmentKind.valueOf(it.string("kind"))) }
+        objects(json).map {
+            Attachment(it.string("path"), AttachmentKind.valueOf(it.string("kind")), it["name"]?.jsonPrimitive?.content)
+        }
 
     /** `[{"name": "...", "arguments": "<JSON object as a string>"}, ...]`, keeping the model's text as is. */
     fun encodeToolCalls(calls: List<ToolCall>): String? =

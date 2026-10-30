@@ -89,7 +89,7 @@ object Compaction {
 
     private fun Turn.transcriptLine(): String? = when (role) {
         Role.USER -> {
-            val media = attachments.map { if (it.kind == AttachmentKind.IMAGE) "[photo]" else "[voice message]" } +
+            val media = attachments.map { it.mark() } +
                 if (images.isNotEmpty()) listOf("[photos]") else emptyList()
             val content = (media + text).filter { it.isNotBlank() }.joinToString(" ")
             if (fromTool) "Tool ($toolName): $content" else "User: $content"
