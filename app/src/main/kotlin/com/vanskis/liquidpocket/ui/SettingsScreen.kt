@@ -38,7 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
+import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.InstructionPresets
+import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
@@ -56,6 +58,7 @@ fun SettingsScreen(
     vm: SettingsViewModel = viewModel(),
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val omniInstalled by vm.omniInstalled.collectAsStateWithLifecycle()
     // Sliders move locally and persist when released, so dragging does not write on every frame.
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
@@ -175,6 +178,27 @@ fun SettingsScreen(
                 "Android is also used whenever the loaded model cannot hear or speak.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            Text("Live voice model", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+            val live = LiveVoiceModel.resolve(settings.liveVoiceModel, omniInstalled)
+            Column(modifier = Modifier.selectableGroup()) {
+                VoiceEngineOption(
+                    label = "${MEDIA_MODEL.displayName} (fast, its own voice)",
+                    detail = if (omniInstalled) {
+                        "Hears you directly and answers in its own voice."
+                    } else {
+                        "Download it in Manage model to use it."
+                    },
+                    selected = live == LiveVoiceModel.OMNI,
+                    onSelect = { vm.setLiveVoiceModel(LiveVoiceModel.OMNI) },
+                    enabled = omniInstalled,
+                )
+                VoiceEngineOption(
+                    label = "${ACTIVE_MODEL.displayName} with Android voice",
+                    detail = "Android types what you say; the model can think and search, and Android reads the reply.",
+                    selected = live == LiveVoiceModel.TEXT,
+                    onSelect = { vm.setLiveVoiceModel(LiveVoiceModel.TEXT) },
+                )
+            }
 
             OutlinedButton(onClick = onOpenMemory, modifier = Modifier.padding(top = 24.dp)) { Text("Things to remember") }
             Text(
@@ -188,12 +212,14 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun VoiceEngineOption(label: String, detail: String, selected: Boolean, onSelect: () -> Unit) {
+private fun VoiceEngineOption(label: String, detail: String, selected: Boolean, onSelect: () -> Unit, enabled: Boolean = true) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().selectable(selected = selected, onClick = onSelect, role = Role.RadioButton).padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth()
+            .selectable(selected = selected, onClick = onSelect, enabled = enabled, role = Role.RadioButton)
+            .padding(vertical = 4.dp),
     ) {
-        RadioButton(selected = selected, onClick = null)
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
         Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
             Text(label, style = MaterialTheme.typography.bodyLarge)
             Text(detail, style = MaterialTheme.typography.bodySmall)

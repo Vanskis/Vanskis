@@ -70,6 +70,8 @@ class ChatMediaUi(
     /** The top bar's speak-replies toggle; hidden when null. */
     val speakReplies: Boolean? = null,
     val onToggleSpeakReplies: () -> Unit = {},
+    /** The top bar's Live button: opens the hands-free live voice screen; hidden when null. */
+    val onLive: (() -> Unit)? = null,
 )
 
 /** The attachments waiting in the composer, each with a remove button. */

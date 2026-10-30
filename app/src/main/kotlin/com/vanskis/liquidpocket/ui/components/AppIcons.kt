@@ -105,6 +105,14 @@ object AppIcons {
         )
     }
 
+    /** Sound bars: live voice. */
+    val GraphicEq: ImageVector by lazy {
+        fromPath(
+            "Filled.GraphicEq",
+            "M7,18h2V6H7v12zM11,22h2V2h-2v20zM3,14h2v-4H3v4zM15,18h2V6h-2v12zM19,10v4h2v-4h-2z",
+        )
+    }
+
     /** A four-pointed star: the assistant's mark beside its replies. */
     val Sparkle: ImageVector by lazy {
         fromPath(

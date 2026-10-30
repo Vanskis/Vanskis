@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
@@ -34,6 +35,8 @@ data class AppSettings(
     val customInstructions: String = "",
     /** Let the model reason before it answers (the composer's Think chip); Think harder always does. */
     val think: Boolean = true,
+    /** Who live voice talks to; null until chosen, which means Omni when installed ([LiveVoiceModel.resolve]). */
+    val liveVoiceModel: LiveVoiceModel? = null,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -59,6 +62,7 @@ class SettingsRepository(context: Context) {
                 webSearch = prefs[WEB_SEARCH] ?: true,
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
                 think = prefs[THINK] ?: true,
+                liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
             )
         }
         .distinctUntilChanged()
@@ -95,6 +99,10 @@ class SettingsRepository(context: Context) {
         store.edit { it[THINK] = value }
     }
 
+    suspend fun setLiveVoiceModel(value: LiveVoiceModel) {
+        store.edit { it[LIVE_VOICE_MODEL] = value.name }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
@@ -104,5 +112,6 @@ class SettingsRepository(context: Context) {
         val WEB_SEARCH = booleanPreferencesKey("web_search")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val THINK = booleanPreferencesKey("think")
+        val LIVE_VOICE_MODEL = stringPreferencesKey("live_voice_model")
     }
 }

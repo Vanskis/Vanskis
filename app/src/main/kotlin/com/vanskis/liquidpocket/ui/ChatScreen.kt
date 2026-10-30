@@ -29,11 +29,17 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
+import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.ChatViewModel
+import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.modelStatus
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.media.AndroidMediaLoader
@@ -56,6 +62,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val recordingMillis by vm.recordingMillis.collectAsStateWithLifecycle()
     val transcript by vm.transcript.collectAsStateWithLifecycle()
     val think by vm.think.collectAsStateWithLifecycle()
+    val live by vm.live.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
 
@@ -89,6 +96,17 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
         // A tap while recording stops it; otherwise the permission is asked for on first use.
         if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
+    // Live voice listens continuously, so it ends when the app leaves the screen.
+    val askMicForLive = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.startLive() else vm.showError("Live voice needs the microphone. You can allow it in the app's settings.")
+    }
+    val onLive = {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) vm.startLive() else askMicForLive.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.stopLive() }
+
     // The widget's mic button opens a new chat listening (access/LaunchRequest.kt).
     val launch by vm.launch.collectAsStateWithLifecycle()
     LaunchedEffect(launch) {
@@ -126,7 +144,19 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
         onTranscriptUsed = vm::transcriptUsed,
         speakReplies = speakReplies,
         onToggleSpeakReplies = vm::toggleSpeakReplies,
+        onLive = onLive,
     )
+
+    // Full screen over the chat, which the turns still land in; Back closes it.
+    live?.let { ui ->
+        Dialog(onDismissRequest = { vm.stopLive() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            LiveVoiceScreen(
+                live = ui,
+                modelName = if (ui.model == LiveVoiceModel.OMNI) MEDIA_MODEL.displayName else ACTIVE_MODEL.displayName,
+                onClose = { vm.stopLive() },
+            )
+        }
+    }
 
     val placeholder = LocalImageThumbnail.current
     val thumbnail = remember(placeholder) {

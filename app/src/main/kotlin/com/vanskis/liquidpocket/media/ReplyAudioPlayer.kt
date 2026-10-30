@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Plays the model's speech as it streams: [enqueue] returns at once and a writer thread feeds a
@@ -16,6 +17,10 @@ class ReplyAudioPlayer {
     private class Chunk(val generation: Int, val sampleRate: Int, val samples: FloatArray)
 
     private val queue = LinkedBlockingQueue<Chunk>()
+    /** Chunks enqueued and not yet written or dropped. */
+    private val inFlight = AtomicInteger()
+    /** Frames written to the track since it last started from an empty buffer. Writer thread writes, under [lock]. */
+    private var framesWritten = 0L
     private val lock = Any()
     @Volatile private var generation = 0
     @Volatile private var released = false
@@ -30,14 +35,24 @@ class ReplyAudioPlayer {
         synchronized(lock) {
             if (writer == null) writer = Thread(::writeLoop, "reply-audio").apply { isDaemon = true; start() }
         }
+        inFlight.incrementAndGet()
         queue.put(Chunk(generation, sampleRate, samples))
     }
+
+    /** Whether speech is still queued or playing; false once the last of it has left the speaker or [stop] ran. */
+    val busy: Boolean
+        get() = synchronized(lock) {
+            if (inFlight.get() > 0) return@synchronized true
+            val t = track ?: return@synchronized false
+            trackGeneration == generation && runCatching { t.playbackHeadPosition.toLong() < framesWritten }.getOrDefault(false)
+        }
 
     /** Stops playback now and forgets what is queued. */
     fun stop() {
         synchronized(lock) {
             generation++
-            queue.clear()
+            val dropped = ArrayList<Chunk>()
+            inFlight.addAndGet(-queue.drainTo(dropped))
             track?.let {
                 runCatching {
                     it.pause()
@@ -57,23 +72,30 @@ class ReplyAudioPlayer {
         try {
             while (!released) {
                 val chunk = queue.take()
-                val t = synchronized(lock) {
-                    if (chunk.generation != generation) return@synchronized null
-                    trackFor(chunk.sampleRate).also {
-                        // A write that raced stop() may have left old speech in the buffer.
-                        if (trackGeneration != chunk.generation) {
-                            if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.pause()
-                            it.flush()
-                            trackGeneration = chunk.generation
+                try {
+                    val t = synchronized(lock) {
+                        if (chunk.generation != generation) return@synchronized null
+                        val current = track
+                        trackFor(chunk.sampleRate).also {
+                            // A write that raced stop() may have left old speech in the buffer.
+                            if (trackGeneration != chunk.generation || it !== current) {
+                                if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.pause()
+                                it.flush()
+                                trackGeneration = chunk.generation
+                                framesWritten = 0
+                            }
+                            if (it.playState != AudioTrack.PLAYSTATE_PLAYING) it.play()
                         }
-                        if (it.playState != AudioTrack.PLAYSTATE_PLAYING) it.play()
+                    } ?: continue
+                    var offset = 0
+                    while (offset < chunk.samples.size && chunk.generation == generation) {
+                        val n = t.write(chunk.samples, offset, chunk.samples.size - offset, AudioTrack.WRITE_BLOCKING)
+                        if (n <= 0) break
+                        offset += n
+                        synchronized(lock) { framesWritten += n }
                     }
-                } ?: continue
-                var offset = 0
-                while (offset < chunk.samples.size && chunk.generation == generation) {
-                    val n = t.write(chunk.samples, offset, chunk.samples.size - offset, AudioTrack.WRITE_BLOCKING)
-                    if (n <= 0) break
-                    offset += n
+                } finally {
+                    inFlight.decrementAndGet()
                 }
             }
         } catch (_: InterruptedException) {
