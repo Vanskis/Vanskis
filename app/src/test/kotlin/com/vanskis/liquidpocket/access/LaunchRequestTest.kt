@@ -82,4 +82,17 @@ class LaunchRequestTest {
         assertEquals("document.pdf", SharedInbox.safeFileName(null))
         assertEquals("document.pdf", SharedInbox.safeFileName(".."))
     }
+
+    @Test fun `an intent relaunched from Recents asks for nothing`() {
+        val share = IncomingIntent<String>(ACTION_SEND, type = "text/plain", text = "hello", fromHistory = true)
+        assertNull(LaunchRequest.from(share))
+        val voice = IncomingIntent<String>(
+            action = "android.intent.action.MAIN",
+            start = LaunchRequest.START_VOICE,
+            fromOwnEntry = true,
+            fromHistory = true,
+        )
+        assertNull(LaunchRequest.from(voice))
+        assertEquals(NewChat<String>(startVoice = true), LaunchRequest.from(voice.copy(fromHistory = false)))
+    }
 }

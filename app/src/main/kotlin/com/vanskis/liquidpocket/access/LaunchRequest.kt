@@ -28,7 +28,7 @@ sealed interface LaunchRequest<out U> {
         const val MIME_PDF = "application/pdf"
 
         /** The request [intent] makes, or null when it asks for nothing beyond opening the app. */
-        fun <U> from(intent: IncomingIntent<U>): NewChat<U>? = when (intent.action) {
+        fun <U> from(intent: IncomingIntent<U>): NewChat<U>? = if (intent.fromHistory) null else when (intent.action) {
             ACTION_SEND, ACTION_SEND_MULTIPLE -> share(intent)
             // Only the app's own widget and tile reach the non-exported entry that may start the mic.
             else -> if (!intent.fromOwnEntry) null else when (intent.start) {
@@ -69,6 +69,8 @@ data class IncomingIntent<out U>(
     val start: String? = null,
     /** True when the intent came through the app's non-exported widget and tile entry. */
     val fromOwnEntry: Boolean = false,
+    /** True when Android relaunched the task from Recents: the original request was handled already. */
+    val fromHistory: Boolean = false,
 )
 
 data class SharedStream<out U>(val uri: U, val mime: String?)

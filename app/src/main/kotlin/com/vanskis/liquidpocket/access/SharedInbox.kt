@@ -25,5 +25,8 @@ object SharedInbox {
         return cleaned.ifBlank { fallback }
     }
 
+    /** The folder under filesDir that [SharedDocuments] copies into. */
+    const val SHARED_DIR = "shared"
+
     private const val MAX_NAME = 80
 }

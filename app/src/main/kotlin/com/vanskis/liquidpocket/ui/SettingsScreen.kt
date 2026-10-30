@@ -28,10 +28,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +54,10 @@ import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.SettingsViewModel
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+private const val INSTRUCTIONS_SAVE_DELAY_MS = 500L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -69,7 +76,20 @@ fun SettingsScreen(
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
 
-    var instructions by remember(settings.customInstructions) { mutableStateOf(settings.customInstructions) }
+    // Seeded once and saved debounced, so typing is never overwritten by the stored value coming back.
+    var instructions by rememberSaveable { mutableStateOf(settings.customInstructions) }
+    var instructionsEdited by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(instructions) {
+        if (!instructionsEdited) return@LaunchedEffect
+        delay(INSTRUCTIONS_SAVE_DELAY_MS)
+        vm.setCustomInstructions(instructions)
+    }
+    // Leaving the screen inside the delay still saves.
+    val latestInstructions by rememberUpdatedState(instructions)
+    val latestEdited by rememberUpdatedState(instructionsEdited)
+    DisposableEffect(Unit) {
+        onDispose { if (latestEdited) vm.setCustomInstructions(latestInstructions) }
+    }
 
     BackHandler(onBack = onBack)
 
@@ -143,14 +163,14 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = 8.dp),
             ) {
                 InstructionPresets.ALL.forEach { (label, text) ->
-                    AssistChip(onClick = { instructions = text; vm.setCustomInstructions(text) }, label = { Text(label) })
+                    AssistChip(onClick = { instructions = text; instructionsEdited = true }, label = { Text(label) })
                 }
             }
             OutlinedTextField(
                 value = instructions,
                 onValueChange = {
                     instructions = it.take(SystemPrompt.MAX_CUSTOM_CHARS)
-                    vm.setCustomInstructions(instructions)
+                    instructionsEdited = true
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 minLines = 3,
