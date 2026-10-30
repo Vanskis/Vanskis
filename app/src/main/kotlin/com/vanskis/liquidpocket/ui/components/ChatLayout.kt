@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.chat.ChatSearchHit
 import com.vanskis.liquidpocket.chat.ChatState
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ModelStatus
@@ -77,6 +78,12 @@ interface ChatActions {
     fun openConversation(id: Long)
     fun renameConversation(id: Long, title: String)
     fun deleteConversation(id: Long)
+
+    /** Saved conversations whose title or messages contain [query]. */
+    suspend fun searchChats(query: String): List<ChatSearchHit>
+
+    /** A saved conversation as Markdown, null if it is gone. */
+    suspend fun exportChat(id: Long): String?
     fun dismissError()
 
     /** Answers the tool call waiting in [ChatState.confirmation], if [confirmationId] is the shown card's. */
@@ -94,6 +101,8 @@ fun ChatLayout(
     conversations: List<Conversation>,
     actions: ChatActions,
     onCopy: (String) -> Unit,
+    /** Hands a chat's title and Markdown to the system share sheet. */
+    onShare: (title: String, markdown: String) -> Unit,
     onOpenSettings: () -> Unit,
     media: ChatMediaUi = ChatMediaUi(),
     smartModelName: String = "",
@@ -150,6 +159,10 @@ fun ChatLayout(
                     onOpen = { id -> closeDrawerThen { actions.openConversation(id) } },
                     onRename = actions::renameConversation,
                     onDelete = actions::deleteConversation,
+                    onSearch = actions::searchChats,
+                    onExport = actions::exportChat,
+                    onShare = onShare,
+                    onCopyAll = onCopy,
                 )
             }
         },

@@ -206,6 +206,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     override fun deleteConversation(id: Long) = controller.deleteConversation(id)
 
+    override suspend fun searchChats(query: String) = graph.chats.search(query)
+
+    override suspend fun exportChat(id: Long) = graph.chats.export(id)
+
     override fun dismissError() = controller.dismissError()
 
     override fun approveTool(confirmationId: Long) = controller.approveTool(confirmationId)
