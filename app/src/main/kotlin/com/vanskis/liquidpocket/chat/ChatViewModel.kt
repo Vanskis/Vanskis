@@ -22,6 +22,7 @@ import com.vanskis.liquidpocket.media.ReplySpeaker
 import com.vanskis.liquidpocket.media.VoiceRecorder
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.tools.PermissionGate
+import com.vanskis.liquidpocket.tools.WebTools
 import com.vanskis.liquidpocket.tools.phoneTools
 import com.vanskis.liquidpocket.ui.components.ChatActions
 import kotlinx.coroutines.Dispatchers
@@ -67,7 +68,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
     val permissions = PermissionGate(app)
-    private val tools = phoneTools(graph, permissions)
+    private val tools = phoneTools(graph, permissions) { settings.value.webSearch }
     /** Omni stays loaded; the smart model takes its place for one reply, fetched over Wi-Fi the first time. */
     private val models = object : ModelTargets {
         override suspend fun resident() = installed(ACTIVE_MODEL)
@@ -129,7 +130,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         val s = settings.value
         return GenerationParams(
             temperature = s.temperature,
-            tools = tools.map { it.spec },
+            tools = tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
             speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine, graph.engine.capabilities.value),
         )
     }

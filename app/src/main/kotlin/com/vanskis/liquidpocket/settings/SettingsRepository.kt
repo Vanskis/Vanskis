@@ -27,6 +27,8 @@ data class AppSettings(
     val speakReplies: Boolean = false,
     /** Who hears voice messages and speaks replies; [VoiceEngine.MODEL] falls back to Android when it cannot. */
     val voiceEngine: VoiceEngine = VoiceEngine.MODEL,
+    /** Offer the model web_search and fetch_page; their queries are the only data that leaves the phone. */
+    val webSearch: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -49,6 +51,7 @@ class SettingsRepository(context: Context) {
                 dynamicColor = prefs[DYNAMIC_COLOR] ?: true,
                 speakReplies = prefs[SPEAK_REPLIES] ?: false,
                 voiceEngine = VoiceEngine.entries.firstOrNull { it.name == prefs[VOICE_ENGINE] } ?: VoiceEngine.MODEL,
+                webSearch = prefs[WEB_SEARCH] ?: true,
             )
         }
         .distinctUntilChanged()
@@ -73,11 +76,16 @@ class SettingsRepository(context: Context) {
         store.edit { it[VOICE_ENGINE] = value.name }
     }
 
+    suspend fun setWebSearch(value: Boolean) {
+        store.edit { it[WEB_SEARCH] = value }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SPEAK_REPLIES = booleanPreferencesKey("speak_replies")
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
+        val WEB_SEARCH = booleanPreferencesKey("web_search")
     }
 }

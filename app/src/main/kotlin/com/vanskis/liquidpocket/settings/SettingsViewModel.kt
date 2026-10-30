@@ -35,4 +35,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setVoiceEngine(value: VoiceEngine) {
         viewModelScope.launch { repo.setVoiceEngine(value) }
     }
+
+    fun setWebSearch(value: Boolean) {
+        viewModelScope.launch { repo.setWebSearch(value) }
+    }
 }
