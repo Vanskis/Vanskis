@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.chat
 
+import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.AudioInput
 import com.vanskis.liquidpocket.engine.Capabilities
 import com.vanskis.liquidpocket.engine.ChatMessage
@@ -41,6 +42,7 @@ class ChatControllerTest {
         override val capabilities = MutableStateFlow(Capabilities.NONE)
         override val lastStats = MutableStateFlow<GenerationStats?>(null)
         val loads = mutableListOf<Pair<String, Int>>()
+        val configs = mutableListOf<EngineConfig>()
         var trainedContext = 32768
         var loadFailure: Exception? = null
         var chatFailure: Exception? = null
@@ -71,6 +73,8 @@ class ChatControllerTest {
         override suspend fun load(modelPath: String, config: EngineConfig) {
             loadFailure?.let { throw it }
             loads += modelPath to config.contextSize
+            configs += config
+            // Always the CPU, like a phone whose NPU cannot run the model.
             state.value = EngineState.Ready(modelPath, minOf(config.contextSize, trainedContext))
         }
 
@@ -333,6 +337,19 @@ class ChatControllerTest {
         c.ensureLoaded("/m.gguf", 8192)
         c.ensureLoaded("/m.gguf", 8192)
         assertEquals(1, engine.loads.size)
+    }
+
+    @Test fun `switching the accelerator reloads the model once, even when the NPU falls back`() = runTest {
+        var accelerator = Accelerator.CPU
+        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), accelerator = { accelerator })
+        c.ensureLoaded("/m.gguf", 8192)
+        c.ensureLoaded("/m.gguf", 8192)
+        assertEquals(listOf(Accelerator.CPU), engine.configs.map { it.accelerator })
+
+        accelerator = Accelerator.NPU
+        c.ensureLoaded("/m.gguf", 8192)
+        c.ensureLoaded("/m.gguf", 8192)
+        assertEquals(listOf(Accelerator.CPU, Accelerator.NPU), engine.configs.map { it.accelerator })
     }
 
     @Test fun `a model the engine already has loaded is not loaded again`() = runTest {

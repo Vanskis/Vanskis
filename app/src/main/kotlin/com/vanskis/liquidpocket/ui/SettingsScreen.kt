@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -42,6 +44,7 @@ import com.vanskis.liquidpocket.chat.InstructionPresets
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.SettingsViewModel
 import java.util.Locale
@@ -56,6 +59,9 @@ fun SettingsScreen(
     vm: SettingsViewModel = viewModel(),
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val engineState by vm.engineState.collectAsStateWithLifecycle()
+    val benchmarking by vm.benchmarking.collectAsStateWithLifecycle()
+    val benchmark by vm.benchmark.collectAsStateWithLifecycle()
     // Sliders move locally and persist when released, so dragging does not write on every frame.
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
@@ -173,6 +179,44 @@ fun SettingsScreen(
             }
             Text(
                 "Android is also used whenever the loaded model cannot hear or speak.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Text("Performance", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use NPU (experimental)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (vm.npuAvailable) {
+                            "Runs the model on the phone's NPU, or on the CPU when it cannot. Changing it reloads the model."
+                        } else {
+                            "This build is CPU-only."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(checked = settings.useNpu, onCheckedChange = vm::setUseNpu, enabled = vm.npuAvailable)
+            }
+            (engineState as? EngineState.Ready)?.acceleratorNote?.let { note ->
+                Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    onClick = vm::runBenchmark,
+                    enabled = !benchmarking && engineState != EngineState.Generating,
+                ) { Text("Run benchmark") }
+                if (benchmarking) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            Text(
+                if (benchmarking) {
+                    "Running…"
+                } else {
+                    benchmark ?: "Decode speed of the loaded model on the CPU and, in builds that have it, the NPU."
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
 

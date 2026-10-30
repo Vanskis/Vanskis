@@ -34,6 +34,8 @@ data class AppSettings(
     val customInstructions: String = "",
     /** Let the model reason before it answers (the composer's Think chip); Think harder always does. */
     val think: Boolean = true,
+    /** Ask the engine for the NPU (experimental); it falls back to the CPU when it cannot use it. */
+    val useNpu: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
@@ -59,6 +61,7 @@ class SettingsRepository(context: Context) {
                 webSearch = prefs[WEB_SEARCH] ?: true,
                 customInstructions = prefs[CUSTOM_INSTRUCTIONS] ?: "",
                 think = prefs[THINK] ?: true,
+                useNpu = prefs[USE_NPU] ?: false,
             )
         }
         .distinctUntilChanged()
@@ -95,6 +98,10 @@ class SettingsRepository(context: Context) {
         store.edit { it[THINK] = value }
     }
 
+    suspend fun setUseNpu(value: Boolean) {
+        store.edit { it[USE_NPU] = value }
+    }
+
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
@@ -104,5 +111,6 @@ class SettingsRepository(context: Context) {
         val WEB_SEARCH = booleanPreferencesKey("web_search")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val THINK = booleanPreferencesKey("think")
+        val USE_NPU = booleanPreferencesKey("use_npu")
     }
 }
