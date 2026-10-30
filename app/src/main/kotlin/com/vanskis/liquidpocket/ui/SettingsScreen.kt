@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.settings.AppSettings
@@ -75,8 +76,15 @@ fun SettingsScreen(
                 steps = (ContextSize.MAX - ContextSize.MIN) / step - 1,
                 onValueChangeFinished = { vm.setContextSize(contextSize.roundToInt()) },
             )
+            // Follows the slider as it moves, before the size is saved.
             Text(
-                "Longer conversations fit in a larger context, at the cost of memory. Changing it reloads the model.",
+                "Memory: " + MemoryEstimate.label(ACTIVE_MODEL, contextSize.roundToInt()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "Longer conversations fit in a larger context, at the cost of memory (a rough estimate: the model plus " +
+                    "its cache for every token). Changing it reloads the model.",
                 style = MaterialTheme.typography.bodySmall,
             )
 
