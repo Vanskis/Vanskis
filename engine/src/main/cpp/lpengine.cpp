@@ -151,6 +151,9 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <map>
+#include <mutex>
+
 namespace {
 
 // Mirrors com.vanskis.liquidpocket.core.ContextSize.
@@ -188,6 +191,56 @@ struct unit {
 
 // The Hexagon backend once nativeInitNpu has loaded it (stays loaded for the process).
 ggml_backend_reg_t g_npu_reg = nullptr;
+
+// Where an NPU load put the model, for nativeAcceleratorReport: llama.cpp's own lines about it
+// (layers offloaded, buffer sizes, graph splits) and the Hexagon backend's warnings, collected by
+// lp_log while an NPU load is traced, plus which device computed each op (count_op).
+std::mutex g_trace_mu;
+bool g_trace = false;                   // nativeSetOpTrace: trace the next NPU load
+bool g_tracing = false;                 // the loaded model is traced
+std::vector<std::string> g_trace_notes;
+long g_ops_npu = 0;
+long g_ops_cpu = 0;
+std::map<std::string, long> g_cpu_ops;  // op name -> times computed on the CPU
+
+void lp_log(enum ggml_log_level level, const char * text, void * user) {
+    lp_android_log_callback(level, text, user);
+    if (text == nullptr) return;
+    std::lock_guard<std::mutex> lock(g_trace_mu);
+    if (!g_tracing) return;
+    const std::string line(text);
+    const bool placement = line.find("offloaded ") != std::string::npos || line.find("model buffer size") != std::string::npos ||
+                           line.find("splits = ") != std::string::npos;
+    const bool npu_problem = line.rfind("ggml-hex:", 0) == 0 && (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR);
+    if ((placement || npu_problem) && g_trace_notes.size() < 24) {
+        size_t end = line.find_last_not_of(" \n");
+        size_t start = line.find_first_not_of(' ');
+        if (end != std::string::npos && start <= end) g_trace_notes.push_back(line.substr(start, end - start + 1));
+    }
+}
+
+// The scheduler's eval callback on a traced load. Asked about each node before it is computed
+// (ask=true); answering false for all of them observes nothing, so only the split's own sync is
+// added. The node's output buffer says which device computed it.
+bool count_op(struct ggml_tensor * t, bool ask, void * /*user*/) {
+    if (!ask || t == nullptr || t->buffer == nullptr) return false;
+    switch (t->op) {
+        case GGML_OP_NONE: case GGML_OP_VIEW: case GGML_OP_RESHAPE: case GGML_OP_PERMUTE: case GGML_OP_TRANSPOSE:
+            return false;
+        default:
+            break;
+    }
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(t->buffer));
+    const bool cpu = dev == nullptr || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    std::lock_guard<std::mutex> lock(g_trace_mu);
+    if (cpu) {
+        ++g_ops_cpu;
+        ++g_cpu_ops[ggml_op_desc(t)];
+    } else {
+        ++g_ops_npu;
+    }
+    return false;
+}
 
 llama_model * g_model = nullptr;
 llama_context * g_ctx = nullptr;
@@ -658,8 +711,8 @@ size_t sum_tokens(const std::vector<unit> & units) {
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInit(JNIEnv * env, jobject /*thiz*/, jstring jlib_dir) {
-    llama_log_set(lp_android_log_callback, nullptr);
-    mtmd_helper_log_set(lp_android_log_callback, nullptr);
+    llama_log_set(lp_log, nullptr);
+    mtmd_helper_log_set(lp_log, nullptr);
     const std::string lib_dir = jstring_to_std(env, jlib_dir);
     // The DSP opens the skels (libggml-htp-v<arch>.so, next to the NPU backend) from
     // ADSP_LIBRARY_PATH when the backend opens its sessions. Set here, before llama.cpp starts any
@@ -670,6 +723,11 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeInit(JNIEnv * env, jobjec
         const std::string adsp = lib_dir + ";" + (prev != nullptr && prev[0] != '\0' ? prev : ADSP_SYSTEM_PATHS);
         setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
         LOGi("ADSP_LIBRARY_PATH=%s", adsp.c_str());
+        // The Hexagon session's settings, read when its backend starts (ggml-hexagon.cpp, getenv
+        // GGML_HEXAGON_*). Spelled out rather than left to the defaults: the DSP clocked for burst
+        // (DCVS off) and fused ops. Anything already set in the environment wins.
+        setenv("GGML_HEXAGON_POWER_MODE", "burst", 0);
+        setenv("GGML_HEXAGON_OPFUSION", "1", 0);
     }
     LOGi("Loading ggml backends from %s", lib_dir.c_str());
     ggml_backend_load_all_from_path(lib_dir.c_str());
@@ -724,6 +782,14 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
     free_all();
     const std::string path = jstring_to_std(env, jpath);
     const bool npu = jnpu == JNI_TRUE;
+    {
+        std::lock_guard<std::mutex> lock(g_trace_mu);
+        g_tracing = npu && g_trace;
+        g_trace_notes.clear();
+        g_ops_npu = 0;
+        g_ops_cpu = 0;
+        g_cpu_ops.clear();
+    }
     if (npu && g_npu_reg == nullptr) {
         throw_java(env, "The NPU backend is not loaded");
         return 0;
@@ -776,6 +842,7 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
     cparams.n_ubatch = BATCH_SIZE;
     cparams.n_threads = jn_threads;
     cparams.n_threads_batch = jn_threads;
+    if (g_tracing) cparams.cb_eval = count_op;
     try {
         g_ctx = llama_init_from_model(g_model, cparams);
     } catch (const std::exception & e) {
@@ -841,6 +908,40 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeCapabilities(JNIEnv * env
     jintArray out = env->NewIntArray(5);
     if (out != nullptr) env->SetIntArrayRegion(out, 0, 5, caps);
     return out;
+}
+
+// Whether the next NPU load is traced for nativeAcceleratorReport. A traced model runs a little
+// slower (each split is waited for), so only the benchmark traces.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeSetOpTrace(JNIEnv * /*env*/, jobject /*thiz*/, jboolean on) {
+    std::lock_guard<std::mutex> lock(g_trace_mu);
+    g_trace = on == JNI_TRUE;
+}
+
+// Where the traced NPU load put the model, one fact per line: llama.cpp's placement lines, the
+// Hexagon backend's warnings, and the share of ops the NPU computed with the ones left to the CPU.
+// Null when the loaded model is not traced.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeAcceleratorReport(JNIEnv * env, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lock(g_trace_mu);
+    if (!g_tracing) return nullptr;
+    std::string out;
+    for (const auto & note : g_trace_notes) out += note + "\n";
+    const long total = g_ops_npu + g_ops_cpu;
+    if (total > 0) {
+        out += "ops on the NPU: " + std::to_string(g_ops_npu * 100 / total) + "% (" + std::to_string(g_ops_npu) + " of " +
+               std::to_string(total) + ")";
+        if (!g_cpu_ops.empty()) {
+            std::vector<std::pair<std::string, long>> ops(g_cpu_ops.begin(), g_cpu_ops.end());
+            std::sort(ops.begin(), ops.end(), [](const auto & a, const auto & b) { return a.second > b.second; });
+            out += "; on the CPU:";
+            for (size_t i = 0; i < ops.size() && i < 6; ++i) {
+                out += std::string(i == 0 ? " " : ", ") + ops[i].first + " x" + std::to_string(ops[i].second);
+            }
+        }
+        out += "\n";
+    }
+    return env->NewStringUTF(out.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL

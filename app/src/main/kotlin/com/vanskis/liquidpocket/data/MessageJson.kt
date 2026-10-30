@@ -9,6 +9,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -42,7 +43,7 @@ object MessageJson {
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
     /**
-     * `{"thinking": "...", "thinkingMillis": 1234, "summary": true, "caption": "..."}`, a key left out when null (or
+     * `{"thinking": "...", "thinkingMillis": 1234, "thinkingTokens": 340, "summary": true, "caption": "..."}`, a key left out when null (or
      * false, for `summary`). No extras is stored as null.
      */
     fun encodeExtras(extras: MessageExtras): String? =
@@ -51,6 +52,7 @@ object MessageJson {
             extras.thinkingMillis?.let { put("thinkingMillis", it) }
             if (extras.summary) put("summary", true)
             extras.caption?.let { put("caption", it) }
+            extras.thinkingTokens?.let { put("thinkingTokens", it) }
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -63,6 +65,7 @@ object MessageJson {
                 thinkingMillis = obj["thinkingMillis"]?.jsonPrimitive?.longOrNull,
                 summary = obj["summary"]?.jsonPrimitive?.booleanOrNull == true,
                 caption = obj["caption"]?.jsonPrimitive?.takeIf { it.isString }?.content,
+                thinkingTokens = obj["thinkingTokens"]?.jsonPrimitive?.intOrNull,
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -85,6 +88,8 @@ data class MessageExtras(
     val thinkingMillis: Long? = null,
     val summary: Boolean = false,
     val caption: String? = null,
+    val thinkingTokens: Int? = null,
 ) {
-    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty()
+    val isEmpty: Boolean get() =
+        thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty() && thinkingTokens == null
 }

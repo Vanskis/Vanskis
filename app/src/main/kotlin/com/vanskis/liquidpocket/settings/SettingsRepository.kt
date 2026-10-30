@@ -23,8 +23,8 @@ import java.io.IOException
 data class AppSettings(
     val contextSize: Int = ContextSize.DEFAULT,
     val temperature: Float = DEFAULT_TEMPERATURE,
-    /** Material You colors from the wallpaper; off uses the app's own palette. */
-    val dynamicColor: Boolean = true,
+    /** The app's look ([AppTheme]); Wallpaper takes Material You colors from the wallpaper. */
+    val theme: AppTheme = AppTheme.WALLPAPER,
     /** Read replies aloud: in the model's own voice when it can speak, otherwise Android's. */
     val speakReplies: Boolean = false,
     /** Who hears voice messages and speaks replies; [VoiceEngine.MODEL] falls back to Android when it cannot. */
@@ -60,7 +60,7 @@ class SettingsRepository(context: Context) {
             AppSettings(
                 contextSize = prefs[CONTEXT_SIZE] ?: ContextSize.DEFAULT,
                 temperature = prefs[TEMPERATURE] ?: AppSettings.DEFAULT_TEMPERATURE,
-                dynamicColor = prefs[DYNAMIC_COLOR] ?: true,
+                theme = AppTheme.from(prefs[THEME], prefs[DYNAMIC_COLOR]),
                 speakReplies = prefs[SPEAK_REPLIES] ?: false,
                 voiceEngine = VoiceEngine.entries.firstOrNull { it.name == prefs[VOICE_ENGINE] } ?: VoiceEngine.MODEL,
                 webSearch = prefs[WEB_SEARCH] ?: true,
@@ -81,8 +81,21 @@ class SettingsRepository(context: Context) {
         store.edit { it[TEMPERATURE] = value.coerceIn(0f, AppSettings.MAX_TEMPERATURE) }
     }
 
-    suspend fun setDynamicColor(value: Boolean) {
-        store.edit { it[DYNAMIC_COLOR] = value }
+    /** Stores every setting in [value] at once (the Settings screen's Save). */
+    suspend fun save(value: AppSettings) {
+        store.edit {
+            it[CONTEXT_SIZE] = ContextSize.clamp(value.contextSize)
+            it[TEMPERATURE] = value.temperature.coerceIn(0f, AppSettings.MAX_TEMPERATURE)
+            it[THEME] = value.theme.name
+            it[SPEAK_REPLIES] = value.speakReplies
+            it[VOICE_ENGINE] = value.voiceEngine.name
+            it[WEB_SEARCH] = value.webSearch
+            it[CUSTOM_INSTRUCTIONS] = value.customInstructions.take(SystemPrompt.MAX_CUSTOM_CHARS)
+            it[THINK] = value.think
+            it[THINK_BUDGET] = ThinkBudget.clamp(value.thinkBudget)
+            it[USE_NPU] = value.useNpu
+            value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
+        }
     }
 
     suspend fun setSpeakReplies(value: Boolean) {
@@ -120,7 +133,9 @@ class SettingsRepository(context: Context) {
     private companion object {
         val CONTEXT_SIZE = intPreferencesKey("context_size")
         val TEMPERATURE = floatPreferencesKey("temperature")
+        /** Read only, to pick a theme for settings stored before themes existed ([AppTheme.from]). */
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val THEME = stringPreferencesKey("theme")
         val SPEAK_REPLIES = booleanPreferencesKey("speak_replies")
         val VOICE_ENGINE = stringPreferencesKey("voice_engine")
         val WEB_SEARCH = booleanPreferencesKey("web_search")

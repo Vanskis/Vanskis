@@ -9,11 +9,15 @@ import android.speech.SpeechRecognizer
 
 /**
  * Android speech-to-text into the message field, for models that cannot hear or when the user chose
- * Android. Prefers the on-device recognizer, so speech stays on the phone where it can. Main thread.
+ * Android. Prefers the on-device recognizer, so speech stays on the phone where it can; when that
+ * one cannot do the phone's language (no language pack, as on some Samsung phones) it retries with
+ * the regular recognizer, and keeps using that one from then on. Main thread.
  */
 class Dictation(context: Context) {
     private val app = context.applicationContext
     private var recognizer: SpeechRecognizer? = null
+    /** The on-device recognizer failed for the language; the regular one is used instead. */
+    private var onDeviceFailed = false
 
     val available: Boolean
         get() = SpeechRecognizer.isOnDeviceRecognitionAvailable(app) || SpeechRecognizer.isRecognitionAvailable(app)
@@ -22,6 +26,7 @@ class Dictation(context: Context) {
      * Listens until the user pauses; [onText] gets the best transcript, [onDone] always runs once at the end.
      * For live voice: [onSpeechStart] runs when the user starts talking, [onLevel] gets the input level
      * (dB, roughly -2 to 10), and [onNoSpeech], when given, takes hearing nothing instead of [onError].
+     * [onUnavailable], when given, takes no recognizer on the phone doing the language instead of [onError].
      */
     fun start(
         onText: (String) -> Unit,
@@ -30,9 +35,11 @@ class Dictation(context: Context) {
         onSpeechStart: () -> Unit = {},
         onLevel: (Float) -> Unit = {},
         onNoSpeech: (() -> Unit)? = null,
+        onUnavailable: (() -> Unit)? = null,
     ) {
         cancel()
-        val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
+        val onDevice = !onDeviceFailed && SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
+        val fallback = onDevice && SpeechRecognizer.isRecognitionAvailable(app)
         val r = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(app) else SpeechRecognizer.createSpeechRecognizer(app)
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
@@ -43,6 +50,22 @@ class Dictation(context: Context) {
             }
 
             override fun onError(error: Int) {
+                val language = error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+                if (fallback && (language || error in ON_DEVICE_FAILURES)) {
+                    // Before anything was heard: try again with the regular recognizer.
+                    onDeviceFailed = true
+                    if (recognizer === r) {
+                        r.destroy()
+                        recognizer = null
+                    }
+                    start(onText, onError, onDone, onSpeechStart, onLevel, onNoSpeech, onUnavailable)
+                    return
+                }
+                if (language && onUnavailable != null) {
+                    onUnavailable()
+                    finish()
+                    return
+                }
                 val nothingHeard = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
                 if (nothingHeard && onNoSpeech != null) {
                     onNoSpeech()
@@ -93,5 +116,14 @@ class Dictation(context: Context) {
     fun cancel() {
         recognizer?.destroy()
         recognizer = null
+    }
+
+    private companion object {
+        /** The on-device recognizer could not run at all (its service or language check failed), not a problem with the speech. */
+        val ON_DEVICE_FAILURES = setOf(
+            SpeechRecognizer.ERROR_SERVER,
+            SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
+            SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT,
+        )
     }
 }

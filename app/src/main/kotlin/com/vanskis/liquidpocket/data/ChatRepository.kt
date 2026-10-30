@@ -97,6 +97,7 @@ class ChatRepository(
             toolName = toolName,
             thinking = extras.thinking,
             thinkingMillis = extras.thinkingMillis,
+            thinkingTokens = extras.thinkingTokens,
             summary = extras.summary,
             caption = extras.caption,
         )
@@ -114,6 +115,6 @@ class ChatRepository(
         attachmentsJson = MessageJson.encodeAttachments(attachments),
         toolCallsJson = MessageJson.encodeToolCalls(toolCalls),
         toolName = toolName,
-        extrasJson = MessageJson.encodeExtras(MessageExtras(thinking, thinkingMillis, summary, caption)),
+        extrasJson = MessageJson.encodeExtras(MessageExtras(thinking, thinkingMillis, summary, caption, thinkingTokens)),
     )
 }

@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import com.vanskis.liquidpocket.access.LaunchIntents
 import com.vanskis.liquidpocket.access.SharedDocuments
 import com.vanskis.liquidpocket.chat.ChatViewModel
+import com.vanskis.liquidpocket.settings.AppTheme
 import com.vanskis.liquidpocket.ui.ChatScreen
 import com.vanskis.liquidpocket.ui.LiquidPocketTheme
 import com.vanskis.liquidpocket.ui.MemoryScreen
@@ -49,9 +50,9 @@ class MainActivity : ComponentActivity() {
         val app = application as LiquidPocketApp
         val installed = app.installer.installedFile(ACTIVE_MODEL) != null
         setContent {
-            // Null until the settings are read; wallpaper colors (the default) meanwhile.
+            // Null until the settings are read; the wallpaper theme (the default) meanwhile.
             val settings by app.settings.settings.collectAsStateWithLifecycle(initialValue = null)
-            LiquidPocketTheme(dynamicColor = settings?.dynamicColor ?: true) {
+            LiquidPocketTheme(theme = settings?.theme ?: AppTheme.WALLPAPER) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     LiquidPocketRoot(start = if (installed) Screen.CHAT else Screen.SETUP, launches = launches)
                 }

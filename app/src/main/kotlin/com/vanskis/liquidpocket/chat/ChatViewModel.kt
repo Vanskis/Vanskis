@@ -464,12 +464,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                 onText = { _transcript.value = it },
                 onError = { controller.showError(it) },
                 onDone = ::endDictation,
+                // No recognizer does the language: the model transcribes a recording instead, when one can hear.
+                onUnavailable = if (mediaInstalled.value) ({ endDictation(); recordForModel() }) else null,
             )
         } catch (e: Exception) {
             controller.showError("Could not start speech recognition: ${e.message ?: e.javaClass.simpleName}")
             dictation.cancel()
             endDictation()
         }
+    }
+
+    /** Records a clip for the model, as the mic does when the model hears. */
+    private fun recordForModel() {
+        val app = getApplication<Application>()
+        if (ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            controller.showError(MIC_PERMISSION)
+            return
+        }
+        startRecording(VoiceRoute.RECORD_SAMPLE_RATE)
     }
 
     private fun endDictation() {
@@ -491,6 +503,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private var liveJob: Job? = null
     private var liveSend: Job? = null
     private var liveRecognizing = false
+    /** No recognizer does the language; live voice reopens with LFM3-Omni hearing instead. */
+    private var liveToOmni = false
     /** What Android's recognizer heard of the turn (1.7B mode). */
     private var liveTranscript: String? = null
     /** What was heard and has not reached the chat; a send that new speech cut short goes with the next turn. */
@@ -504,14 +518,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     val live: StateFlow<LiveUi?> = _live.asStateFlow()
 
     /** Opens live voice with the model the settings choose. The screen asks for the microphone first. */
-    fun startLive() {
+    fun startLive(model: LiveVoiceModel? = null) {
         if (liveTurns != null) return
         val app = getApplication<Application>()
         if (ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             controller.showError(MIC_PERMISSION)
             return
         }
-        val model = LiveVoiceModel.resolve(settings.value.liveVoiceModel, mediaInstalled.value)
+        val model = model ?: LiveVoiceModel.resolve(settings.value.liveVoiceModel, mediaInstalled.value)
         if (model == LiveVoiceModel.TEXT && !liveDictation.available) {
             controller.showError("Speech recognition is not available on this phone.")
             return
@@ -713,6 +727,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
                 onSpeechStart = { liveEvent(LiveEvent.SpeechStart) },
                 onLevel = { db -> _live.update { it?.copy(level = ((db + 2f) / 12f).coerceIn(0f, 1f)) } },
                 onNoSpeech = {},
+                onUnavailable = if (mediaInstalled.value) ({ liveToOmni = true }) else null,
             )
         } catch (e: Exception) {
             liveRecognizing = false
@@ -723,6 +738,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     private fun onLiveRecognizerDone() {
         liveRecognizing = false
+        if (liveToOmni) {
+            liveToOmni = false
+            stopLive()
+            startLive(LiveVoiceModel.OMNI)
+            return
+        }
         val turns = liveTurns ?: return
         when {
             // A turn cut short waits in liveUnsent: send it even when nothing more was heard.

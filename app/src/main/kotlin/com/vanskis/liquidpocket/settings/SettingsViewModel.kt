@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
+import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
+import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
@@ -16,22 +18,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
 /**
- * The model is reloaded with a new context size the next time the Chat screen opens, and on a new
- * accelerator with the next reply.
+ * Changes are held as a draft until [save]. Once saved, the model is reloaded with a new context size
+ * the next time the Chat screen opens, and on a new accelerator with the next reply.
  */
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val graph = app as LiquidPocketApp
     private val repo = graph.settings
     private val engine = graph.engine
 
-    val settings: StateFlow<AppSettings> = repo.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+    /** What is stored. */
+    val saved: StateFlow<AppSettings> = repo.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    /**
+     * The screen's unsaved edits, in order. Kept as changes rather than a copy of the settings, so a
+     * setting changed elsewhere meanwhile (the composer's Think chip) is not put back by [save].
+     */
+    private val edits = MutableStateFlow<List<(AppSettings) -> AppSettings>>(emptyList())
+
+    /** What the screen shows: what is stored with the edits on top. */
+    val settings: StateFlow<AppSettings> =
+        combine(saved, edits, ::applied).stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    /** Whether there are edits that [save] would store. */
+    val unsaved: StateFlow<Boolean> =
+        combine(saved, edits) { stored, changes -> applied(stored, changes) != stored }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Whether this build ships the NPU backend; the public build is CPU-only. */
     val npuAvailable: Boolean = engine.npuAvailable
@@ -50,44 +70,48 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val omniInstalled: StateFlow<Boolean> =
         graph.downloads.status(MEDIA_MODEL).map { it == DownloadStatus.Ready }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    fun setContextSize(value: Int) {
-        viewModelScope.launch { repo.setContextSize(value) }
+    fun setContextSize(value: Int) = edit { it.copy(contextSize = ContextSize.clamp(value)) }
+
+    fun setThinkBudget(value: Int) = edit { it.copy(thinkBudget = ThinkBudget.clamp(value)) }
+
+    fun setTemperature(value: Float) = edit { it.copy(temperature = value.coerceIn(0f, AppSettings.MAX_TEMPERATURE)) }
+
+    fun setTheme(value: AppTheme) = edit { it.copy(theme = value) }
+
+    fun setSpeakReplies(value: Boolean) = edit { it.copy(speakReplies = value) }
+
+    fun setVoiceEngine(value: VoiceEngine) = edit { it.copy(voiceEngine = value) }
+
+    fun setWebSearch(value: Boolean) = edit { it.copy(webSearch = value) }
+
+    fun setLiveVoiceModel(value: LiveVoiceModel) = edit { it.copy(liveVoiceModel = value) }
+
+    fun setCustomInstructions(value: String) = edit { it.copy(customInstructions = value.take(SystemPrompt.MAX_CUSTOM_CHARS)) }
+
+    fun setUseNpu(value: Boolean) = edit { it.copy(useNpu = value) }
+
+    private fun edit(change: (AppSettings) -> AppSettings) {
+        edits.value = edits.value + change
     }
 
-    fun setThinkBudget(value: Int) {
-        viewModelScope.launch { repo.setThinkBudget(value) }
+    private fun applied(stored: AppSettings, changes: List<(AppSettings) -> AppSettings>) =
+        changes.fold(stored) { value, change -> change(value) }
+
+    fun save() {
+        val changes = edits.value
+        if (changes.isEmpty()) return
+        viewModelScope.launch {
+            val target = applied(saved.value, changes)
+            repo.save(target)
+            // Dropped once the stored value has caught up, so the screen does not flash the old one.
+            withTimeoutOrNull(SAVE_SETTLE_MS) { saved.first { it == target } }
+            // Edits made while saving stay unsaved.
+            edits.value = edits.value.drop(changes.size)
+        }
     }
 
-    fun setTemperature(value: Float) {
-        viewModelScope.launch { repo.setTemperature(value) }
-    }
-
-    fun setDynamicColor(value: Boolean) {
-        viewModelScope.launch { repo.setDynamicColor(value) }
-    }
-
-    fun setSpeakReplies(value: Boolean) {
-        viewModelScope.launch { repo.setSpeakReplies(value) }
-    }
-
-    fun setVoiceEngine(value: VoiceEngine) {
-        viewModelScope.launch { repo.setVoiceEngine(value) }
-    }
-
-    fun setWebSearch(value: Boolean) {
-        viewModelScope.launch { repo.setWebSearch(value) }
-    }
-
-    fun setLiveVoiceModel(value: LiveVoiceModel) {
-        viewModelScope.launch { repo.setLiveVoiceModel(value) }
-    }
-
-    fun setCustomInstructions(value: String) {
-        viewModelScope.launch { repo.setCustomInstructions(value) }
-    }
-
-    fun setUseNpu(value: Boolean) {
-        viewModelScope.launch { repo.setUseNpu(value) }
+    fun discard() {
+        edits.value = emptyList()
     }
 
     /** Measures the loaded model's decode speed; ignored while one runs or a reply is generating. */
@@ -110,8 +134,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private fun describe(result: BenchResult): String {
         val cpu = "CPU ${tokPerSec(result.cpuTokPerSec)}"
         val npu = result.npuTokPerSec?.let { "NPU ${tokPerSec(it)}" } ?: result.npuNote
-        return if (npu == null) cpu else "$cpu · $npu"
+        val speeds = if (npu == null) cpu else "$cpu · $npu"
+        return listOfNotNull(speeds, result.verdict, result.npuReport).joinToString("\n\n")
     }
 
     private fun tokPerSec(value: Double) = String.format(Locale.ROOT, "%.1f tok/s", value)
+
+    private companion object {
+        const val SAVE_SETTLE_MS = 1_000L
+    }
 }

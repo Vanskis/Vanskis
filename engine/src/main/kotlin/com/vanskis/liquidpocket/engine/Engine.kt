@@ -1,5 +1,6 @@
 package com.vanskis.liquidpocket.engine
 
+import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -87,7 +88,28 @@ data class BenchResult(
     /** Null when the NPU was not available or could not run the model; [npuNote] says why. */
     val npuTokPerSec: Double?,
     val npuNote: String? = null,
-)
+    /** Where the NPU run's layers and ops actually ran, when it was traced. */
+    val npuReport: String? = null,
+) {
+    /** Plainly, whether the NPU speeds the model up; null when it did not run. */
+    val verdict: String?
+        get() {
+            val npu = npuTokPerSec ?: return null
+            if (cpuTokPerSec <= 0.0) return null
+            val ratio = npu / cpuTokPerSec
+            return when {
+                ratio >= FASTER -> String.format(Locale.ROOT, "The NPU is %.1f× faster than the CPU.", ratio)
+                ratio <= SLOWER -> String.format(Locale.ROOT, "The NPU is slower than the CPU (%.1f×).", ratio)
+                else -> "About the same: the NPU is not speeding this model up."
+            }
+        }
+
+    private companion object {
+        /** Within about 15% either way is run-to-run noise, not a speed-up. */
+        const val FASTER = 1.15
+        const val SLOWER = 0.87
+    }
+}
 
 data class GenerationParams(
     val temperature: Float = 0.3f,

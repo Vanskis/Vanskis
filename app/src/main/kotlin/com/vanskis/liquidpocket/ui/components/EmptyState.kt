@@ -37,7 +37,7 @@ fun EmptyState(modelName: String, onSuggestion: (String) -> Unit, modifier: Modi
         ) {
             Text(
                 "Hello",
-                style = MaterialTheme.typography.displayMedium.copy(brush = Accent.brush, fontWeight = FontWeight.Medium),
+                style = MaterialTheme.typography.displayMedium.copy(brush = LocalAppStyle.current.brush, fontWeight = FontWeight.Medium),
             )
             Text(
                 "How can I help you today?",

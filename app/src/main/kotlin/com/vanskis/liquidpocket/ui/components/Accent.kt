@@ -19,17 +19,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * The blue → purple → pink accent. Used sparingly, on top of the theme's (possibly wallpaper)
- * colors: the greeting, the assistant's mark, the send button and the context ring.
+ * Fixed colors. The blue → purple → pink gradient is the Aurora and Wallpaper themes' accent; the
+ * current theme's accent is [LocalAppStyle].
  */
 object Accent {
     val Blue = Color(0xFF4B8DF8)
     val Purple = Color(0xFF9B72CB)
     val Pink = Color(0xFFD96570)
-    val colors: List<Color> = listOf(Blue, Purple, Pink)
-
-    /** Left to right across whatever it fills. */
-    val brush: Brush = Brush.linearGradient(colors)
 
     /** Amber and red for a context window that is nearly full; fixed so they read as warnings on any wallpaper. */
     val Warning = Color(0xFFF2A900)
@@ -37,7 +33,7 @@ object Accent {
 }
 
 /** Paints the content's pixels with [brush] instead of its own colors (for icons). */
-fun Modifier.gradientTint(brush: Brush = Accent.brush): Modifier = this
+fun Modifier.gradientTint(brush: Brush): Modifier = this
     .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
     .drawWithContent {
         drawContent()
@@ -61,9 +57,10 @@ fun AssistantMark(modifier: Modifier = Modifier, busy: Boolean = false, size: Dp
     } else {
         { 0f }
     }
+    val brush = LocalAppStyle.current.brush
     Icon(
         AppIcons.Sparkle,
         contentDescription = null,
-        modifier = modifier.size(size).graphicsLayer { rotationZ = angle() }.gradientTint(),
+        modifier = modifier.size(size).graphicsLayer { rotationZ = angle() }.gradientTint(brush),
     )
 }

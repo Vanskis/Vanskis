@@ -4,9 +4,17 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
+import com.vanskis.liquidpocket.settings.AppTheme
 
-/** The app's own teal palette, used when wallpaper colors are turned off in Settings. */
+/** The themes' own colors ([AppTheme.WALLPAPER] has none: it takes the wallpaper's). */
 object Palette {
+    fun of(theme: AppTheme, dark: Boolean): ColorScheme = when (theme) {
+        AppTheme.CLAY -> if (dark) clayDark else clayLight
+        AppTheme.MONO -> if (dark) monoDark else monoLight
+        AppTheme.AURORA, AppTheme.WALLPAPER -> if (dark) this.dark else light
+    }
+
+    /** Aurora: cool teal greys under the gradient accent. */
     val light: ColorScheme = lightColorScheme(
         primary = Color(0xFF006782),
         onPrimary = Color(0xFFFFFFFF),
@@ -69,5 +77,119 @@ object Palette {
         surfaceContainer = Color(0xFF1B2023),
         surfaceContainerHigh = Color(0xFF252B2E),
         surfaceContainerHighest = Color(0xFF303538),
+    )
+
+    // Clay: warm cream and terracotta.
+    private val clayLight: ColorScheme = lightColorScheme(
+        primary = Color(0xFFC2613F),
+        onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFF6DBCE),
+        onPrimaryContainer = Color(0xFF3D1A0C),
+        secondary = Color(0xFF7A6A5C),
+        onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFECE3D6),
+        onSecondaryContainer = Color(0xFF2B231B),
+        tertiary = Color(0xFF6B7A55),
+        onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = Color(0xFFE1E8CF),
+        onTertiaryContainer = Color(0xFF1D2610),
+        background = Color(0xFFF5F4EE),
+        onBackground = Color(0xFF2B2A27),
+        surface = Color(0xFFF5F4EE),
+        onSurface = Color(0xFF2B2A27),
+        surfaceVariant = Color(0xFFE8E3D8),
+        onSurfaceVariant = Color(0xFF5A564E),
+        outline = Color(0xFF8A847A),
+        outlineVariant = Color(0xFFD6D0C4),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        surfaceContainerLow = Color(0xFFF0EEE6),
+        surfaceContainer = Color(0xFFEAE7DD),
+        surfaceContainerHigh = Color(0xFFE5E1D6),
+        surfaceContainerHighest = Color(0xFFDFDACE),
+    )
+
+    private val clayDark: ColorScheme = darkColorScheme(
+        primary = Color(0xFFE08A68),
+        onPrimary = Color(0xFF4A1D0C),
+        primaryContainer = Color(0xFF6B3420),
+        onPrimaryContainer = Color(0xFFFFDBCC),
+        secondary = Color(0xFFCBBFB1),
+        onSecondary = Color(0xFF352C24),
+        secondaryContainer = Color(0xFF4A443D),
+        onSecondaryContainer = Color(0xFFECE3D6),
+        tertiary = Color(0xFFB9C99E),
+        onTertiary = Color(0xFF27331A),
+        tertiaryContainer = Color(0xFF3D4A2B),
+        onTertiaryContainer = Color(0xFFD5E5BA),
+        background = Color(0xFF262624),
+        onBackground = Color(0xFFEDEAE2),
+        surface = Color(0xFF262624),
+        onSurface = Color(0xFFEDEAE2),
+        surfaceVariant = Color(0xFF3D3B37),
+        onSurfaceVariant = Color(0xFFC8C2B7),
+        outline = Color(0xFF97918A),
+        outlineVariant = Color(0xFF4A4743),
+        surfaceContainerLowest = Color(0xFF1C1C1A),
+        surfaceContainerLow = Color(0xFF2B2A27),
+        surfaceContainer = Color(0xFF302F2C),
+        surfaceContainerHigh = Color(0xFF393835),
+        surfaceContainerHighest = Color(0xFF44423F),
+    )
+
+    // Mono: neutral black and white.
+    private val monoLight: ColorScheme = lightColorScheme(
+        primary = Color(0xFF0D0D0D),
+        onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFE5E5E5),
+        onPrimaryContainer = Color(0xFF0D0D0D),
+        secondary = Color(0xFF5D5D5D),
+        onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFECECEC),
+        onSecondaryContainer = Color(0xFF0D0D0D),
+        tertiary = Color(0xFF5D5D5D),
+        onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = Color(0xFFECECEC),
+        onTertiaryContainer = Color(0xFF0D0D0D),
+        background = Color(0xFFFFFFFF),
+        onBackground = Color(0xFF0D0D0D),
+        surface = Color(0xFFFFFFFF),
+        onSurface = Color(0xFF0D0D0D),
+        surfaceVariant = Color(0xFFF0F0F0),
+        onSurfaceVariant = Color(0xFF5D5D5D),
+        outline = Color(0xFF8F8F8F),
+        outlineVariant = Color(0xFFE3E3E3),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        surfaceContainerLow = Color(0xFFF9F9F9),
+        surfaceContainer = Color(0xFFF4F4F4),
+        surfaceContainerHigh = Color(0xFFEFEFEF),
+        surfaceContainerHighest = Color(0xFFE8E8E8),
+    )
+
+    private val monoDark: ColorScheme = darkColorScheme(
+        primary = Color(0xFFFFFFFF),
+        onPrimary = Color(0xFF0D0D0D),
+        primaryContainer = Color(0xFF3A3A3A),
+        onPrimaryContainer = Color(0xFFFFFFFF),
+        secondary = Color(0xFFB4B4B4),
+        onSecondary = Color(0xFF0D0D0D),
+        secondaryContainer = Color(0xFF383838),
+        onSecondaryContainer = Color(0xFFECECEC),
+        tertiary = Color(0xFFB4B4B4),
+        onTertiary = Color(0xFF0D0D0D),
+        tertiaryContainer = Color(0xFF383838),
+        onTertiaryContainer = Color(0xFFECECEC),
+        background = Color(0xFF212121),
+        onBackground = Color(0xFFECECEC),
+        surface = Color(0xFF212121),
+        onSurface = Color(0xFFECECEC),
+        surfaceVariant = Color(0xFF303030),
+        onSurfaceVariant = Color(0xFFB4B4B4),
+        outline = Color(0xFF8F8F8F),
+        outlineVariant = Color(0xFF424242),
+        surfaceContainerLowest = Color(0xFF171717),
+        surfaceContainerLow = Color(0xFF262626),
+        surfaceContainer = Color(0xFF2A2A2A),
+        surfaceContainerHigh = Color(0xFF303030),
+        surfaceContainerHighest = Color(0xFF383838),
     )
 }

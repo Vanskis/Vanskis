@@ -5,22 +5,27 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
+import com.vanskis.liquidpocket.settings.AppTheme
+import com.vanskis.liquidpocket.ui.components.AppStyle
+import com.vanskis.liquidpocket.ui.components.LocalAppStyle
 
 /**
- * Light or dark following the system. With [dynamicColor], Material You colors from the wallpaper
- * (minSdk 33 always has them); otherwise the app's own [Palette].
+ * [theme] in light or dark following the system: its [Palette] colors (Material You colors from the
+ * wallpaper for [AppTheme.WALLPAPER]; minSdk 33 always has them) and its [AppStyle].
  */
 @Composable
-fun LiquidPocketTheme(dynamicColor: Boolean = true, content: @Composable () -> Unit) {
+fun LiquidPocketTheme(theme: AppTheme = AppTheme.WALLPAPER, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    val colors = when {
-        dynamicColor -> {
-            val context = LocalContext.current
-            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        dark -> Palette.dark
-        else -> Palette.light
+    val colors = if (theme == AppTheme.WALLPAPER) {
+        val context = LocalContext.current
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        Palette.of(theme, dark)
     }
-    MaterialTheme(colorScheme = colors, content = content)
+    val style = AppStyle.of(theme, dark)
+    CompositionLocalProvider(LocalAppStyle provides style) {
+        MaterialTheme(colorScheme = colors, typography = style.typography(), content = content)
+    }
 }

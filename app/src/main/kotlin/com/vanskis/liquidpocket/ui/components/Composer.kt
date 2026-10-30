@@ -171,8 +171,8 @@ fun Composer(
                         RoundAction(
                             onClick = onSend,
                             enabled = canSend,
-                            filled = if (canSend) Accent.brush else SolidColor(colors.onSurface.copy(alpha = 0.10f)),
-                            contentColor = if (canSend) Color.White else colors.onSurface.copy(alpha = 0.38f),
+                            filled = if (canSend) LocalAppStyle.current.brush else SolidColor(colors.onSurface.copy(alpha = 0.10f)),
+                            contentColor = if (canSend) LocalAppStyle.current.onAccent else colors.onSurface.copy(alpha = 0.38f),
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,

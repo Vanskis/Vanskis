@@ -362,6 +362,7 @@ private fun MessageList(
                             onTypeOwn = onTypeOwn,
                             thinking = if (turn == null) state.streamingThinking else turn.thinking,
                             thinkingSeconds = turn?.thinkingMillis?.let { (it / 1000).toInt() },
+                            thinkingTokens = if (turn == null) state.streamingThinkingTokens else turn.thinkingTokens,
                         )
                     }
                 }

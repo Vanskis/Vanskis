@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,13 +29,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,13 +50,11 @@ import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
+import com.vanskis.liquidpocket.settings.AppTheme
 import com.vanskis.liquidpocket.settings.SettingsViewModel
 import com.vanskis.liquidpocket.settings.ThinkBudget
 import java.util.Locale
-import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
-
-private const val INSTRUCTIONS_SAVE_DELAY_MS = 500L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -73,37 +69,41 @@ fun SettingsScreen(
     val benchmarking by vm.benchmarking.collectAsStateWithLifecycle()
     val benchmark by vm.benchmark.collectAsStateWithLifecycle()
     val omniInstalled by vm.omniInstalled.collectAsStateWithLifecycle()
-    // Sliders move locally and persist when released, so dragging does not write on every frame.
+    // Sliders move locally and update the draft when released.
     var contextSize by remember(settings.contextSize) { mutableFloatStateOf(settings.contextSize.toFloat()) }
     var temperature by remember(settings.temperature) { mutableFloatStateOf(settings.temperature) }
     var thinkStep by remember(settings.thinkBudget) { mutableFloatStateOf(ThinkBudget.STEPS.indexOf(settings.thinkBudget).toFloat()) }
 
-    // Seeded once and saved debounced, so typing is never overwritten by the stored value coming back.
-    var instructions by rememberSaveable { mutableStateOf(settings.customInstructions) }
-    var instructionsEdited by rememberSaveable { mutableStateOf(false) }
-    // Until the user edits, follow the stored value (the first frame may still show the defaults).
-    LaunchedEffect(settings.customInstructions) {
-        if (!instructionsEdited) instructions = settings.customInstructions
-    }
-    LaunchedEffect(instructions) {
-        if (!instructionsEdited) return@LaunchedEffect
-        delay(INSTRUCTIONS_SAVE_DELAY_MS)
-        vm.setCustomInstructions(instructions)
-    }
-    // Leaving the screen inside the delay still saves.
-    val latestInstructions by rememberUpdatedState(instructions)
-    val latestEdited by rememberUpdatedState(instructionsEdited)
-    DisposableEffect(Unit) {
-        onDispose { if (latestEdited) vm.setCustomInstructions(latestInstructions) }
-    }
+    val unsaved by vm.unsaved.collectAsStateWithLifecycle()
+    val instructions = settings.customInstructions
 
-    BackHandler(onBack = onBack)
+    // Leaving with unsaved edits asks first.
+    var confirmLeave by rememberSaveable { mutableStateOf(false) }
+    val leave: () -> Unit = { if (unsaved) { confirmLeave = true } else { onBack() } }
+    BackHandler(onBack = leave)
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text("Save changes?") },
+            text = { Text("Your changes to the settings are not saved yet.") },
+            confirmButton = {
+                TextButton(onClick = { confirmLeave = false; vm.save(); onBack() }) { Text("Save") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { confirmLeave = false }) { Text("Cancel") }
+                    TextButton(onClick = { confirmLeave = false; vm.discard(); onBack() }) { Text("Discard") }
+                }
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                navigationIcon = { TextButton(onClick = leave) { Text("Back") } },
+                actions = { TextButton(onClick = vm::save, enabled = unsaved) { Text("Save") } },
             )
         },
     ) { padding ->
@@ -167,12 +167,16 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
 
-            Row(modifier = Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Use wallpaper colors", style = MaterialTheme.typography.titleMedium)
-                    Text("Off uses the app's own colors.", style = MaterialTheme.typography.bodySmall)
+            Text("Theme", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+            Column(modifier = Modifier.selectableGroup()) {
+                AppTheme.entries.forEach { theme ->
+                    VoiceEngineOption(
+                        label = theme.label,
+                        detail = theme.detail,
+                        selected = settings.theme == theme,
+                        onSelect = { vm.setTheme(theme) },
+                    )
                 }
-                Switch(checked = settings.dynamicColor, onCheckedChange = vm::setDynamicColor)
             }
 
             Row(modifier = Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -190,15 +194,12 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = 8.dp),
             ) {
                 InstructionPresets.ALL.forEach { (label, text) ->
-                    AssistChip(onClick = { instructions = text; instructionsEdited = true }, label = { Text(label) })
+                    AssistChip(onClick = { vm.setCustomInstructions(text) }, label = { Text(label) })
                 }
             }
             OutlinedTextField(
                 value = instructions,
-                onValueChange = {
-                    instructions = it.take(SystemPrompt.MAX_CUSTOM_CHARS)
-                    instructionsEdited = true
-                },
+                onValueChange = vm::setCustomInstructions,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 minLines = 3,
                 supportingText = { Text("${instructions.length} / ${SystemPrompt.MAX_CUSTOM_CHARS}") },

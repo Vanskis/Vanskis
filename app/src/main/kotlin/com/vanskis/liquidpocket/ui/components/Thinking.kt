@@ -30,6 +30,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,15 +42,29 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 /**
  * The model's reasoning above its reply, collapsed to a "Thinking…" / "Thought for 12s" header that
- * expands on tap. Nothing is shown when [thinking] is null. [seconds] is how long it thought, once known.
+ * expands on tap. Nothing is shown when [thinking] is null. [seconds] is how long it thought, once known;
+ * until then a timer counts while [streaming]. [tokens] is how many tokens it has thought.
  */
 @Composable
-fun ThinkingSection(thinking: String?, seconds: Int?, streaming: Boolean, modifier: Modifier = Modifier) {
+fun ThinkingSection(thinking: String?, seconds: Int?, streaming: Boolean, modifier: Modifier = Modifier, tokens: Int? = null) {
     if (thinking == null) return
     var expanded by rememberSaveable { mutableStateOf(false) }
+    // Counts while it thinks and stops when the reply starts, until the turn brings its own time.
+    var liveSeconds by remember { mutableStateOf<Int?>(null) }
+    if (streaming) {
+        LaunchedEffect(Unit) {
+            val start = System.nanoTime()
+            while (true) {
+                val elapsed = (System.nanoTime() - start) / 1_000_000
+                liveSeconds = (elapsed / 1000).toInt()
+                delay(1000 - elapsed % 1000)
+            }
+        }
+    }
     val colors = MaterialTheme.colorScheme
 
     Column(modifier = modifier) {
@@ -76,7 +92,7 @@ fun ThinkingSection(thinking: String?, seconds: Int?, streaming: Boolean, modifi
                 { 1f }
             }
             Text(
-                thinkingLabel(seconds, streaming),
+                thinkingLabel(seconds ?: liveSeconds, streaming, tokens),
                 style = MaterialTheme.typography.labelLarge,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.graphicsLayer { alpha = pulse() },

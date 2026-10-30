@@ -45,6 +45,7 @@ fun ContextRing(
     val fraction by animateFloatAsState(contextFraction(used, total), label = "contextFill")
     val level = contextLevel(used, total)
     val track = MaterialTheme.colorScheme.outlineVariant
+    val accent = LocalAppStyle.current.brush
     val percent = (contextFraction(used, total) * 100).roundToInt()
 
     Box(modifier = modifier) {
@@ -63,7 +64,7 @@ fun ContextRing(
                     val style = Stroke(stroke, cap = StrokeCap.Round)
                     when (level) {
                         ContextLevel.NORMAL ->
-                            drawArc(Accent.brush, -90f, sweep, useCenter = false, topLeft = topLeft, size = arcSize, style = style)
+                            drawArc(accent, -90f, sweep, useCenter = false, topLeft = topLeft, size = arcSize, style = style)
                         ContextLevel.WARNING ->
                             drawArc(Accent.Warning, -90f, sweep, useCenter = false, topLeft = topLeft, size = arcSize, style = style)
                         ContextLevel.CRITICAL ->

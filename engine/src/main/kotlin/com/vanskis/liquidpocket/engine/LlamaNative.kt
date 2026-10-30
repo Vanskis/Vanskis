@@ -127,4 +127,17 @@ internal object LlamaNative {
      * arguments, ...]` as UTF-8, or null when the reply does not match the template's format.
      */
     external fun nativeParseReply(): Array<ByteArray>?
+
+    /**
+     * Whether the next NPU [nativeLoad] records where each op runs (read by [nativeAcceleratorReport]).
+     * It adds one sync per graph split, so it is only for the benchmark; a reload without it clears it.
+     */
+    external fun nativeSetOpTrace(on: Boolean)
+
+    /**
+     * What the traced NPU load and the replies since found: the layers offloaded, the buffer sizes,
+     * the graph splits, the NPU's warnings, and the share of ops run on the NPU with the CPU ops
+     * named. Null when the loaded model was not traced.
+     */
+    external fun nativeAcceleratorReport(): String?
 }

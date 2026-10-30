@@ -165,28 +165,52 @@ internal class LlamaEngine(
     override suspend fun benchmark(): BenchResult {
         val (start, config) = current() ?: throw EngineException("No model loaded")
         val statsBefore = _lastStats.value
+        var traced = false
         try {
             val cpu = benchOn(Accelerator.CPU, start.modelPath, config).first ?: 0.0
-            val (npu, npuNote) =
-                if (npuAvailable) benchOn(Accelerator.NPU, start.modelPath, config) else null to NO_NPU_BUILD
-            return BenchResult(cpu, npu, npuNote)
+            if (!npuAvailable) return BenchResult(cpu, null, NO_NPU_BUILD)
+            traced = true
+            val (npu, npuNote) = benchOn(Accelerator.NPU, start.modelPath, config, trace = true)
+            return BenchResult(cpu, npu, npuNote, npuReport = report)
         } finally {
             withContext(NonCancellable) {
-                // Leave the model loaded the way the user asked for, and their last reply's stats.
-                if (current()?.second != config) load(start.modelPath, config)
+                // Leave the model loaded the way the user asked for, untraced, and their last reply's stats.
+                if (traced || current()?.second != config) load(start.modelPath, config)
                 _lastStats.value = statsBefore
             }
         }
     }
 
-    /** Decode tokens/s of the bench reply on [acc], or null and why when the model could not run there. */
-    private suspend fun benchOn(acc: Accelerator, modelPath: String, config: EngineConfig): Pair<Double?, String?> {
-        if (current()?.first?.accelerator != acc) load(modelPath, config.copy(accelerator = acc))
+    /**
+     * Decode tokens/s of the bench reply on [acc], or null and why when the model could not run there.
+     * With [trace], the model is reloaded with op tracing on and [report] holds what the trace found.
+     */
+    private suspend fun benchOn(
+        acc: Accelerator,
+        modelPath: String,
+        config: EngineConfig,
+        trace: Boolean = false,
+    ): Pair<Double?, String?> {
+        report = null
+        if (trace) {
+            withContext(dispatcher) { LlamaNative.nativeSetOpTrace(true) }
+            try {
+                load(modelPath, config.copy(accelerator = acc))
+            } finally {
+                withContext(NonCancellable + dispatcher) { LlamaNative.nativeSetOpTrace(false) }
+            }
+        } else if (current()?.first?.accelerator != acc) {
+            load(modelPath, config.copy(accelerator = acc))
+        }
         val ready = current()?.first ?: throw EngineException("No model loaded")
         if (ready.accelerator != acc) return null to ready.acceleratorNote
         chat(BENCH_PROMPT, BENCH_PARAMS).collect {}
+        if (trace) report = mutex.withLock { withContext(dispatcher) { LlamaNative.nativeAcceleratorReport() } }
         return _lastStats.value?.decodeTokensPerSecond to null
     }
+
+    /** What the last traced benchmark run found; see [LlamaNative.nativeAcceleratorReport]. */
+    private var report: String? = null
 
     /** The loaded model and the config it was loaded with, null when idle. */
     private suspend fun current(): Pair<EngineState.Ready, EngineConfig>? =

@@ -25,6 +25,8 @@ data class Turn(
     val thinking: String? = null,
     /** ASSISTANT turns with [thinking]: how long the model thought, in milliseconds. */
     val thinkingMillis: Long? = null,
+    /** ASSISTANT turns with [thinking]: how many tokens it took. */
+    val thinkingTokens: Int? = null,
     /**
      * A SYSTEM turn the app wrote: a summary of the turns before it (and of any summary before
      * those). From here on the engine sees this summary and the turns after it, see [Compaction].

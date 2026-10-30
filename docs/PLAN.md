@@ -84,3 +84,22 @@ v81 output reports, conv layers likely on CPU); DuckDuckGo lite is unofficial an
 - **offer_choices(question, options):** chips under the reply, a tap sends the option, "Type my
   own…" focuses the field; only the newest offer is live; the call ends the turn; live voice reads
   the options aloud. New "Interactive story" preset.
+
+## v4 (decided 2026-10-30)
+
+- **Math:** each formula is drawn into a software bitmap; one still blank after drawing shows its
+  source instead of an empty gap.
+- **NPU:** LFM3 stays on llama.cpp's Hexagon backend (no other runtimes or models). llama.cpp is
+  moved to upstream master (aa588a3) for the newest ggml-hexagon; burst power mode and op fusion
+  are on by default. The benchmark's NPU run is traced: layers offloaded, buffer sizes, graph
+  splits, the backend's warnings, and the share of ops on the NPU with the CPU ops named. The
+  verdict is plain: within about 15% of the CPU is "about the same: the NPU is not speeding this
+  model up". If the DSP refuses the session (retail firmware), the note says so.
+- **Thinking:** "Thinking · 12s · 340 tokens" while it runs, then "Thought for 12s · 340 tokens".
+- **Fade-in:** each streamed chunk fades in over 300 ms; finished replies show at once.
+- **Settings:** edits are a draft until Save in the top bar; leaving with unsaved edits asks Save,
+  Discard or Cancel. Changes made elsewhere meanwhile (the composer's Think chip) are kept.
+- **Themes:** Aurora (gradient accents), Clay (warm, serif headings), Mono (black and white) and
+  Wallpaper (Material You, the default). Each sets colors, heading font and bubble shape and
+  follows the system's light or dark mode.
+- **Mic:** the on-device recognizer, then the regular one, then the model's own audio input.

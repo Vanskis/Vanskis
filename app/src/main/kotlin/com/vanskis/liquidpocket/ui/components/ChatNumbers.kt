@@ -45,9 +45,17 @@ fun statsSummary(stats: GenerationStats): String {
     return decode + String.format(Locale.ROOT, " · %.1f s to first token", firstToken)
 }
 
-/** The thinking section's header: "Thinking…" while it streams, then "Thought for 12s" (or "Thoughts"). */
-fun thinkingLabel(seconds: Int?, streaming: Boolean): String = when {
-    streaming -> "Thinking…"
-    seconds != null && seconds >= 0 -> "Thought for ${seconds}s"
-    else -> "Thoughts"
+/**
+ * The thinking section's header: "Thinking · 12s · 340 tokens" while it streams (just "Thinking…"
+ * before either is known), then "Thought for 12s · 340 tokens" (or "Thoughts").
+ */
+fun thinkingLabel(seconds: Int?, streaming: Boolean, tokens: Int? = null): String {
+    val time = seconds?.takeIf { it >= 0 }
+    val count = tokens?.takeIf { it > 0 }?.let { if (it == 1) "1 token" else "$it tokens" }
+    val head = when {
+        streaming -> if (time == null && count == null) return "Thinking…" else "Thinking · ${time ?: 0}s"
+        time != null -> "Thought for ${time}s"
+        else -> "Thoughts"
+    }
+    return if (count == null) head else "$head · $count"
 }

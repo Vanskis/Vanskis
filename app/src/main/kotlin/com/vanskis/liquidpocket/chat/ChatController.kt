@@ -46,6 +46,8 @@ data class ChatState(
     val streaming: String? = null,
     /** The streamed reply's reasoning so far, or null when it has none (yet). */
     val streamingThinking: String? = null,
+    /** Tokens of [streamingThinking] so far. */
+    val streamingThinkingTokens: Int = 0,
     val loading: Boolean = false,
     val error: String? = null,
     /** A tool call waiting for the user's approval; the reply is paused (still [generating]) meanwhile. */
@@ -341,7 +343,7 @@ class ChatController(
         stopRequested = false
         lastParams = params
         val id = ++newestReply
-        _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, error = null) }
+        _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, streamingThinkingTokens = 0, error = null) }
         after { previous ->
             previous?.join()
             var conversationId = before.conversationId
@@ -375,7 +377,7 @@ class ChatController(
                 refreshContextUsed(system, params)
             } finally {
                 // A reply sent while this one captioned its photos owns the streaming state by now.
-                if (newestReply == id) _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
+                if (newestReply == id) _state.update { it.copy(streaming = null, streamingThinking = null, streamingThinkingTokens = 0, confirmation = null) }
             }
         }
     }
@@ -541,7 +543,9 @@ class ChatController(
                     }
                     when (chunk) {
                         is ReplyChunk.Text -> _state.update { it.copy(streaming = (it.streaming ?: "") + chunk.text) }
-                        is ReplyChunk.Thinking -> _state.update { it.copy(streamingThinking = (it.streamingThinking ?: "") + chunk.text) }
+                        is ReplyChunk.Thinking -> _state.update {
+                            it.copy(streamingThinking = (it.streamingThinking ?: "") + chunk.text, streamingThinkingTokens = it.streamingThinkingTokens + 1)
+                        }
                         is ReplyChunk.Audio -> {
                             spoke = true
                             sink.audio(chunk.samples)
@@ -582,12 +586,14 @@ class ChatController(
         val stats = engine.lastStats.value?.takeIf { failure == null && it !== statsBefore }
         val text = _state.value.streaming.orEmpty()
         val thinking = _state.value.streamingThinking?.takeIf { it.isNotBlank() }
+        val thinkingTokens = _state.value.streamingThinkingTokens
         val replyTurn = if (text.isEmpty() && toRun.isEmpty()) {
             null
         } else {
             Turn(
                 Role.ASSISTANT, text, stats, toolCalls = toRun,
                 thinking = thinking, thinkingMillis = thinkingMillis.takeIf { thinking != null },
+                thinkingTokens = thinkingTokens.takeIf { thinking != null && it > 0 },
             )
         }
         _state.update {
@@ -596,6 +602,7 @@ class ChatController(
                 // Still generating while its tool calls run.
                 streaming = if (toRun.isEmpty()) null else "",
                 streamingThinking = null,
+                streamingThinkingTokens = 0,
                 error = failure ?: it.error,
             )
         }

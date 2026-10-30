@@ -16,16 +16,32 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mikepenz.markdown.annotator.annotatorSettings
+import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownParagraph
+import com.mikepenz.markdown.compose.elements.MarkdownText
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.m3.Markdown
@@ -37,6 +53,51 @@ import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.rememberMarkdownState
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.getTextInNode
+
+/** A streaming reply's [FadeTimeline], and the frame clock that redraws its fading pieces. */
+private class TextFade {
+    val timeline = FadeTimeline()
+    val frame = mutableLongStateOf(0L)
+}
+
+/**
+ * A paragraph as [MarkdownParagraph] draws it, with the pieces that just arrived faded: each is
+ * cut out of the drawn text in proportion to how new it is, so it shows on any background.
+ */
+@Composable
+private fun FadingParagraph(model: MarkdownComponentModel, fade: TextFade) {
+    val style = model.typography.paragraph
+    val settings = annotatorSettings()
+    val styled = remember(model.content, model.node, style, settings) {
+        buildAnnotatedString {
+            pushStyle(style.toSpanStyle())
+            buildMarkdownAnnotatedString(model.content, model.node, settings)
+            pop()
+        }
+    }
+    // The paragraph starts at the same place in the reply however much of it has streamed.
+    val key = model.node.startOffset
+    SideEffect { fade.timeline.saw(key, styled.length, System.nanoTime()) }
+    val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
+    MarkdownText(
+        styled,
+        modifier = Modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                fade.frame.longValue // Redraw every frame while the reply streams.
+                val text = layout[0] ?: return@drawWithContent
+                val length = text.layoutInput.text.length
+                for (piece in fade.timeline.fading(key, System.nanoTime())) {
+                    val end = minOf(piece.end, length)
+                    if (piece.start >= end) continue
+                    drawPath(text.getPathForRange(piece.start, end), Color.Black, alpha = 1f - piece.alpha, blendMode = BlendMode.DstOut)
+                }
+            },
+        style = style,
+        onTextLayout = { result, _ -> layout[0] = result },
+    )
+}
 
 /** Where formula <index> goes in the Markdown: an inline code span the annotator swaps for the formula. */
 private fun placeholder(index: Int) = "`\uE000$index\uE001`"
@@ -61,17 +122,32 @@ private fun withPlaceholders(pieces: List<MathText.Piece>): String = buildString
  *
  * LaTeX formulas ([MathText]) are drawn inline by [LocalMathRenderer]; one that does not parse
  * shows as its source in monospace. A formula still streaming (unclosed) stays plain text.
+ *
+ * While [streaming], each new piece of a paragraph fades in ([FadeTimeline]); a finished reply shows at once.
  */
 @Composable
-fun MarkdownReply(text: String, onCopyCode: (String) -> Unit, modifier: Modifier = Modifier) = BoxWithConstraints(modifier) {
+fun MarkdownReply(text: String, onCopyCode: (String) -> Unit, modifier: Modifier = Modifier, streaming: Boolean = false) = BoxWithConstraints(modifier) {
     val pieces = remember(text) { MathText.pieces(text) }
     val math = remember(pieces) { pieces.filterIsInstance<MathText.Piece.Math>() }
     val markdown = rememberMarkdownState(if (math.isEmpty()) text else withPlaceholders(pieces), retainState = true)
     val colors = MaterialTheme.colorScheme
     val type = MaterialTheme.typography
     val copy by rememberUpdatedState(onCopyCode)
-    val components = remember {
+    val fade = remember(streaming) { if (streaming) TextFade() else null }
+    if (fade != null) {
+        LaunchedEffect(fade) {
+            while (true) withFrameNanos { fade.frame.longValue = it }
+        }
+    }
+    val components = remember(fade) {
         markdownComponents(
+            paragraph = { model ->
+                if (fade == null) {
+                    MarkdownParagraph(model.content, model.node, style = model.typography.paragraph)
+                } else {
+                    FadingParagraph(model, fade)
+                }
+            },
             codeFence = { model ->
                 MarkdownCodeFence(model.content, model.node, model.typography.code) { code, language, style ->
                     CodeBlock(code, language, style, onCopy = { copy(code) })

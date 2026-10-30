@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.vanskis.liquidpocket.chat.LivePhase
 import com.vanskis.liquidpocket.chat.LiveUi
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
-import com.vanskis.liquidpocket.ui.components.Accent
+import com.vanskis.liquidpocket.ui.components.LocalAppStyle
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -83,6 +83,7 @@ private fun LiveOrb(phase: LivePhase, level: Float, modifier: Modifier = Modifie
     val time = rememberInfiniteTransition(label = "orb")
     val turn by time.animateFloat(0f, 1f, infiniteRepeatable(tween(3_000, easing = LinearEasing)), label = "orbTurn")
     val ripple by time.animateFloat(0f, 1f, infiniteRepeatable(tween(1_400, easing = LinearEasing)), label = "orbRipple")
+    val accents = LocalAppStyle.current.accents
     Canvas(modifier = modifier) {
         val full = size.minDimension / 2
         val base = full * 0.55f
@@ -98,7 +99,7 @@ private fun LiveOrb(phase: LivePhase, level: Float, modifier: Modifier = Modifie
             for (k in 0 until 2) {
                 val t = (ripple + k * 0.5f) % 1f
                 drawCircle(
-                    brush = Brush.radialGradient(Accent.colors, center = center, radius = full),
+                    brush = Brush.radialGradient(accents, center = center, radius = full),
                     radius = radius + (full - radius) * t,
                     alpha = (1f - t) * 0.5f,
                     style = Stroke(width = 6.dp.toPx() * (1f - t) + 1f),
@@ -107,13 +108,13 @@ private fun LiveOrb(phase: LivePhase, level: Float, modifier: Modifier = Modifie
         }
         if (hearing) {
             drawCircle(
-                brush = Brush.radialGradient(listOf(Accent.Purple.copy(alpha = 0.35f), Accent.Purple.copy(alpha = 0f)), center, radius * 1.5f),
+                brush = Brush.radialGradient(listOf(accents[1].copy(alpha = 0.35f), accents[1].copy(alpha = 0f)), center, radius * 1.5f),
                 radius = radius * 1.5f,
             )
         }
         rotate(degrees = if (phase == LivePhase.WAITING) turn * 360f else turn * 60f) {
             drawCircle(
-                brush = Brush.sweepGradient(Accent.colors + Accent.colors.first(), center),
+                brush = Brush.sweepGradient(accents + accents.first(), center),
                 radius = radius,
             )
         }

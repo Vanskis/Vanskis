@@ -755,6 +755,7 @@ class ChatControllerTest {
         c.send("What is 17 * 23?", params)
         runCurrent()
         assertEquals("17 * 23 = 391.", c.state.value.streamingThinking)
+        assertEquals(2, c.state.value.streamingThinkingTokens)
         assertEquals("", c.state.value.streaming)
         assertTrue("thinking is on by default", engine.sentParams!!.think)
 
@@ -766,7 +767,9 @@ class ChatControllerTest {
         assertEquals("391.", answer.text)
         assertEquals("17 * 23 = 391.", answer.thinking)
         assertEquals(1500L, answer.thinkingMillis)
+        assertEquals(2, answer.thinkingTokens)
         assertNull(s.streamingThinking)
+        assertEquals(0, s.streamingThinkingTokens)
         assertEquals(answer, store.saved.getValue(1L).last())
         assertEquals("only the answer is spoken", "391.", sink.finished.single().first)
     }

@@ -72,5 +72,9 @@ class ChatNumbersTest {
         assertEquals("Thinking…", thinkingLabel(null, streaming = true))
         assertEquals("Thought for 12s", thinkingLabel(12, streaming = false))
         assertEquals("Thoughts", thinkingLabel(null, streaming = false))
+        assertEquals("Thinking · 12s · 340 tokens", thinkingLabel(12, streaming = true, tokens = 340))
+        assertEquals("Thinking · 0s · 1 token", thinkingLabel(null, streaming = true, tokens = 1))
+        assertEquals("Thought for 12s · 340 tokens", thinkingLabel(12, streaming = false, tokens = 340))
+        assertEquals("Thought for 3s", thinkingLabel(3, streaming = false, tokens = 0))
     }
 }

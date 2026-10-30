@@ -59,7 +59,7 @@ fun UserMessage(
             MessageAttachments(attachments, modifier = Modifier.padding(bottom = if (text.isEmpty()) 0.dp else 4.dp))
         }
         if (text.isNotEmpty()) Surface(
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 6.dp, bottomEnd = 24.dp, bottomStart = 24.dp),
+            shape = LocalAppStyle.current.userBubbleShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.widthIn(max = 340.dp),
@@ -104,7 +104,7 @@ private fun MathAwareText(text: String, modifier: Modifier = Modifier) {
 
 /**
  * The model's reply: the sparkle mark, then full-width Markdown with no bubble, like Gemini. Above
- * it, the model's [thinking] when it gives one (see [ThinkingSection]). While [streaming] with no
+ * it, the model's [thinking] when it gives one, with its [thinkingSeconds] and [thinkingTokens] (see [ThinkingSection]). While [streaming] with no
  * text yet it shows the typing indicator. Copy shows once the reply is complete; [onRegenerate] and
  * [onContinue] (a reply cut off by the context or a Stop) only when given, [stats] ("23 tok/s · 0.4 s
  * to first token") when given. [onCopy] copies the whole reply, [onCopyCode] one code block.
@@ -127,17 +127,18 @@ fun AssistantMessage(
     onTypeOwn: () -> Unit = {},
     thinking: String? = null,
     thinkingSeconds: Int? = null,
+    thinkingTokens: Int? = null,
 ) {
     Row(modifier = modifier.fillMaxWidth()) {
         AssistantMark(busy = streaming, modifier = Modifier.padding(top = 2.dp, end = 12.dp))
         Column(modifier = Modifier.weight(1f)) {
             // Still thinking while it streams and no reply text has come yet.
-            ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty())
+            ThinkingSection(thinking, thinkingSeconds, streaming = streaming && text.isEmpty(), tokens = thinkingTokens)
             if (text.isEmpty() && streaming) {
                 if (thinking == null) TypingIndicator(modifier = Modifier.padding(vertical = 8.dp))
             } else if (text.isNotEmpty()) {
                 SelectionContainer {
-                    MarkdownReply(text, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth())
+                    MarkdownReply(text, onCopyCode = onCopyCode, modifier = Modifier.fillMaxWidth(), streaming = streaming)
                 }
             }
             offer?.let { ChoiceChips(it, showQuestion = it.question !in text, onChoose = onChoose, onTypeOwn = onTypeOwn) }
@@ -208,7 +209,7 @@ fun TypingIndicator(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .size(8.dp)
                     .alpha(alpha)
-                    .background(Accent.colors[i], CircleShape),
+                    .background(LocalAppStyle.current.accents[i], CircleShape),
             )
         }
     }
