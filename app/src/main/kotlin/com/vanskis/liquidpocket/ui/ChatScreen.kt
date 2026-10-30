@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -33,10 +34,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.SMART_MODEL
 import com.vanskis.liquidpocket.chat.ChatViewModel
-import com.vanskis.liquidpocket.chat.ModelStatus
 import com.vanskis.liquidpocket.chat.modelStatus
+import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.media.AndroidMediaLoader
-import com.vanskis.liquidpocket.ui.components.AttachmentButtons
 import com.vanskis.liquidpocket.ui.components.ChatLayout
 import com.vanskis.liquidpocket.ui.components.ChatMediaUi
 import com.vanskis.liquidpocket.ui.components.LocalImageThumbnail
@@ -84,35 +84,35 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     }
 
     val status = modelStatus(engineState, state)
+    // The engine reports its context size only while Ready; keep it through Generating.
+    var contextTotal by remember { mutableIntStateOf(0) }
+    LaunchedEffect(engineState) {
+        (engineState as? EngineState.Ready)?.let { contextTotal = it.contextSize }
+    }
     val media = ChatMediaUi(
         pending = pending,
         onRemovePending = vm::removePending,
-        attachmentActions = {
-            AttachmentButtons(
-                enabled = status == ModelStatus.Ready && !state.loading,
-                onPickPhoto = {
-                    pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
-                onTakePhoto = if (!hasCamera) null else fun() {
-                    val (file, uri) = vm.newCameraCapture()
-                    capturePath = file.path
-                    try {
-                        takePhoto.launch(uri)
-                    } catch (e: ActivityNotFoundException) {
-                        capturePath = null
-                        vm.onCameraResult(file.path, taken = false)
-                        vm.showError("No camera app is available.")
-                    }
-                },
-                onMic = {
-                    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                        PackageManager.PERMISSION_GRANTED
-                    // A tap while recording stops it; otherwise the permission is asked for on first use.
-                    if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
-                },
-                recordingMillis = recordingMillis,
-            )
+        onPickPhoto = {
+            pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
+        onTakePhoto = if (!hasCamera) null else fun() {
+            val (file, uri) = vm.newCameraCapture()
+            capturePath = file.path
+            try {
+                takePhoto.launch(uri)
+            } catch (e: ActivityNotFoundException) {
+                capturePath = null
+                vm.onCameraResult(file.path, taken = false)
+                vm.showError("No camera app is available.")
+            }
+        },
+        onMic = {
+            val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            // A tap while recording stops it; otherwise the permission is asked for on first use.
+            if (recordingMillis != null || granted) vm.toggleMic() else askMic.launch(Manifest.permission.RECORD_AUDIO)
+        },
+        recordingMillis = recordingMillis,
         transcript = transcript,
         onTranscriptUsed = vm::transcriptUsed,
         speakReplies = speakReplies,
@@ -139,6 +139,9 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             media = media,
             smartModelName = SMART_MODEL.displayName,
             smartDownload = smartDownload,
+            contextTotal = contextTotal,
+            // No compaction in the chat controller yet: the ring's Compact now stays disabled.
+            onCompact = null,
         )
     }
 }

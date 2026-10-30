@@ -1,5 +1,10 @@
 package com.vanskis.liquidpocket.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -26,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -33,6 +40,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +60,9 @@ import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.download.percent
 import com.vanskis.liquidpocket.engine.Role
 import kotlinx.coroutines.launch
+
+/** Scrolled up more than this (px) into the newest message, the scroll-down button shows. */
+private const val SCROLL_BUTTON_OFFSET = 200
 
 /** What the chat screen can ask for; the view model implements it. */
 interface ChatActions {
@@ -87,6 +98,10 @@ fun ChatLayout(
     media: ChatMediaUi = ChatMediaUi(),
     smartModelName: String = "",
     smartDownload: DownloadStatus? = null,
+    /** The loaded model's context window in tokens; 0 hides the composer's context ring. */
+    contextTotal: Int = 0,
+    /** Summarizes older turns to free context (the ring's Compact now); disabled when null. */
+    onCompact: (() -> Unit)? = null,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -185,9 +200,16 @@ fun ChatLayout(
                     onStop = actions::stop,
                     editing = isEditing,
                     onCancelEdit = { editing = false; input = "" },
-                    attachmentActions = media.attachmentActions,
                     pending = if (isEditing) emptyList() else media.pending,
                     onRemovePending = media.onRemovePending,
+                    attachEnabled = status == ModelStatus.Ready && !state.loading,
+                    onPickPhoto = media.onPickPhoto,
+                    onTakePhoto = media.onTakePhoto,
+                    onMic = media.onMic,
+                    recordingMillis = media.recordingMillis,
+                    contextUsed = contextTokensUsed(state.turns),
+                    contextTotal = contextTotal,
+                    onCompact = onCompact,
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -223,7 +245,8 @@ fun ChatLayout(
 /**
  * Newest message at the bottom; the list is reversed so a growing reply stays anchored above the
  * composer. Row keys are turn indices, and the streaming reply takes the index it will be saved at,
- * so its Markdown is not parsed again from scratch when it completes.
+ * so its Markdown is not parsed again from scratch when it completes. A new message scrolls to the
+ * bottom; scrolled up, a round button brings it back.
  */
 @Composable
 private fun MessageList(
@@ -240,58 +263,82 @@ private fun MessageList(
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(rows) { listState.animateScrollToItem(0) }
+    val scope = rememberCoroutineScope()
+    val scrolledUp by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > SCROLL_BUTTON_OFFSET }
+    }
     val turns = state.turns
     val idle = !state.busy
+    // Stats show under the newest finished reply only, and not while the next one streams.
+    val statsIndex = if (state.generating) -1 else turns.indexOfLast { it.role == Role.ASSISTANT && it.text.isNotEmpty() }
 
-    LazyColumn(
-        state = listState,
-        reverseLayout = true,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = contentPadding.calculateTopPadding() + 12.dp,
-            bottom = contentPadding.calculateBottomPadding() + 12.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        items(count = rows, key = { row -> rows - 1 - row }) { row ->
-            val index = rows - 1 - row
-            val turn = turns.getOrNull(index)
-            val isLast = index == turns.lastIndex
-            val user = turn?.takeIf { it.role == Role.USER && !it.fromTool }
-            val tool = turn?.takeIf { it.role != Role.USER && it.role != Role.ASSISTANT }
-            val confirmation = state.confirmation
-            when {
-                turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
-                // A reply that only called tools: its tool turns that follow show what happened.
-                turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() -> Unit
-                turn == null && confirmation != null -> ToolConfirmationCard(confirmation, onApproveTool, onDeclineTool)
-                user != null -> {
-                    val newest = idle && index == state.lastUserIndex
-                    UserMessage(
-                        text = user.text,
-                        attachments = user.attachments,
-                        onEdit = if (newest) ({ onEdit(user.text) }) else null,
-                        // A user turn with no reply after it: the reply failed or was stopped before its first token.
-                        onRetry = if (newest && isLast) onRegenerate else null,
-                    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = contentPadding.calculateTopPadding() + 12.dp,
+                bottom = contentPadding.calculateBottomPadding() + 12.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(count = rows, key = { row -> rows - 1 - row }) { row ->
+                val index = rows - 1 - row
+                val turn = turns.getOrNull(index)
+                val isLast = index == turns.lastIndex
+                val user = turn?.takeIf { it.role == Role.USER && !it.fromTool }
+                val tool = turn?.takeIf { it.role != Role.USER && it.role != Role.ASSISTANT }
+                val confirmation = state.confirmation
+                when {
+                    turn != null && turn.fromTool -> ToolPhotosMessage(turn.images.size)
+                    // A reply that only called tools: its tool turns that follow show what happened.
+                    turn != null && turn.role == Role.ASSISTANT && turn.text.isEmpty() && turn.toolCalls.isNotEmpty() -> Unit
+                    turn == null && confirmation != null -> ToolConfirmationCard(confirmation, onApproveTool, onDeclineTool)
+                    user != null -> {
+                        val newest = idle && index == state.lastUserIndex
+                        UserMessage(
+                            text = user.text,
+                            attachments = user.attachments,
+                            onEdit = if (newest) ({ onEdit(user.text) }) else null,
+                            // A user turn with no reply after it: the reply failed or was stopped before its first token.
+                            onRetry = if (newest && isLast) onRegenerate else null,
+                        )
+                    }
+                    tool != null -> ToolMessage(tool.toolName, tool.text)
+                    // One call site for the streaming and the saved reply, so its Markdown state carries over.
+                    else -> {
+                        val text = turn?.text ?: state.streaming.orEmpty()
+                        val newest = idle && isLast && state.lastUserIndex >= 0
+                        AssistantMessage(
+                            text = text,
+                            streaming = turn == null,
+                            stats = turn?.stats?.takeIf { index == statsIndex },
+                            onCopyCode = onCopy,
+                            onCopy = { onCopy(text) },
+                            onRegenerate = if (newest) onRegenerate else null,
+                            onThinkHarder = if (newest) onThinkHarder else null,
+                            thinkHarderEnabled = thinkHarderEnabled,
+                        )
+                    }
                 }
-                tool != null -> ToolMessage(tool.toolName, tool.text)
-                // One call site for the streaming and the saved reply, so its Markdown state carries over.
-                else -> {
-                    val text = turn?.text ?: state.streaming.orEmpty()
-                    val newest = idle && isLast && state.lastUserIndex >= 0
-                    AssistantMessage(
-                        text = text,
-                        streaming = turn == null,
-                        stats = turn?.stats,
-                        onCopy = { onCopy(text) },
-                        onRegenerate = if (newest) onRegenerate else null,
-                        onThinkHarder = if (newest) onThinkHarder else null,
-                        thinkHarderEnabled = thinkHarderEnabled,
-                    )
-                }
+            }
+        }
+        AnimatedVisibility(
+            visible = scrolledUp,
+            enter = fadeIn() + scaleIn(),
+            exit = fadeOut() + scaleOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = contentPadding.calculateBottomPadding() + 12.dp),
+        ) {
+            SmallFloatingActionButton(
+                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to the newest message")
             }
         }
     }
