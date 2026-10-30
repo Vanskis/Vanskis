@@ -49,6 +49,19 @@ class AcceleratorFallbackTest {
     }
 
     @Test
+    fun npuThatCrashedLastRunIsNotTouched() {
+        val out = AcceleratorFallback.load(Accelerator.NPU, true, { inits++; null }, npuCrashed = true) { acc ->
+            loads += acc
+            "model on $acc"
+        }
+        assertEquals(Accelerator.CPU, out.accelerator)
+        assertEquals("model on CPU", out.value)
+        assertEquals("The NPU crashed last time; using the CPU", out.note)
+        assertEquals(0, inits)
+        assertEquals(listOf(Accelerator.CPU), loads)
+    }
+
+    @Test
     fun npuInitFailureFallsBackWithItsReason() {
         // A refused DSP session surfaces at load (npuLoadFailureRetriesOnTheCpu), not here.
         val out = run(Accelerator.NPU, initError = "the NPU backend did not start (no Hexagon DSP, or libcdsprpc.so is unavailable)")
