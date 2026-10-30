@@ -12,6 +12,9 @@ import androidx.work.workDataOf
 import com.vanskis.liquidpocket.core.ModelInstaller
 import com.vanskis.liquidpocket.core.ModelSpec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -30,7 +33,7 @@ class ModelDownloads(private val context: Context, private val installer: ModelI
     /** Over Wi-Fi only unless [allowMetered]; an existing pending download is kept as is. */
     fun download(spec: ModelSpec, allowMetered: Boolean) {
         val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
-            .setInputData(workDataOf(ModelDownloadWorker.KEY_MODEL_ID to spec.id))
+            .setInputData(workDataOf(ModelDownloadWorker.KEY_MODEL_ID to spec.id, ModelDownloadWorker.KEY_REPO to spec.repo))
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(if (allowMetered) NetworkType.CONNECTED else NetworkType.UNMETERED)
@@ -57,6 +60,13 @@ class ModelDownloads(private val context: Context, private val installer: ModelI
                 work = infos.lastOrNull()?.let { snapshot(it) },
             )
         }.flowOn(Dispatchers.IO)
+
+    /** Whether the model chosen in Settings, or [standard] that stands in for it, is installed. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun usable(chosen: Flow<ModelSpec>, standard: ModelSpec): Flow<Boolean> =
+        chosen.distinctUntilChanged().flatMapLatest { spec ->
+            combine(status(spec), status(standard)) { a, b -> a == DownloadStatus.Ready || b == DownloadStatus.Ready }
+        }
 
     fun currentNetwork(): NetworkKind {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return NetworkKind.NONE

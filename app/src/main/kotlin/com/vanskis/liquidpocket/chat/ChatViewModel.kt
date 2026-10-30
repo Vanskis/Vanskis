@@ -20,7 +20,6 @@ import com.vanskis.liquidpocket.docs.DocumentText
 import com.vanskis.liquidpocket.docs.ExtractedDocument
 import com.vanskis.liquidpocket.docs.ExtractionProgress
 import com.vanskis.liquidpocket.docs.MlKitOcr
-import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.Accelerator
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.engine.GenerationParams
@@ -98,10 +97,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Runtime permissions the tools ask for; the Chat screen shows the system dialog. */
     val permissions = PermissionGate(app)
     private val tools = phoneTools(graph, permissions) { settings.value.webSearch }
-    /** LFM3-1.7B answers; Omni takes its place for photo and voice turns, when installed. */
+    /**
+     * LFM3-1.7B answers; Omni takes its place for photo and voice turns, when installed. Each is the
+     * Heretic build when chosen in Settings and downloaded, else the standard one.
+     */
     private val models = object : ModelTargets {
-        override suspend fun text() = installed(ACTIVE_MODEL)
-        override suspend fun media() = installed(MEDIA_MODEL)
+        override suspend fun text() = installed(settings.value.textModel) ?: installed(ACTIVE_MODEL)
+        override suspend fun media() = installed(settings.value.mediaModel) ?: installed(MEDIA_MODEL)
     }
 
     private val controller = ChatController(
@@ -121,7 +123,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     /** Whether the media model is installed, so the mic records voice messages for it. */
     private val mediaInstalled: StateFlow<Boolean> =
-        graph.downloads.status(MEDIA_MODEL).map { it == DownloadStatus.Ready }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        graph.downloads.usable(settings.map { it.mediaModel }, MEDIA_MODEL).stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** The Think chip: whether replies reason first. */
     val think: StateFlow<Boolean> =

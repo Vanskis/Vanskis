@@ -133,6 +133,11 @@ class ModelInstallerTest {
         assertNotNull(inst.installedMmproj(spec))
     }
 
+    @Test fun fallbackQuantIsUsedWhenTheFirstIsMissing() {
+        val s = spec.copy(quant = "IQ2_XS", fallbackQuants = listOf("Q5_K_M", "Q4_K_M"))
+        assertEquals("LFM3-Omni-2B-Q4_K_M.gguf", installer(tmp.newFolder()).resolve(s).path)
+    }
+
     @Test fun modelWithoutProjectorIgnoresMmproj() {
         val s = spec.copy(mmprojQuants = null)
         val dir = tmp.newFolder()

@@ -10,12 +10,16 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.vanskis.liquidpocket.ACTIVE_MODEL
+import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.Skill
 import com.vanskis.liquidpocket.chat.Skills
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.core.Heretic
+import com.vanskis.liquidpocket.core.ModelSpec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -45,7 +49,18 @@ data class AppSettings(
     val liveVoiceModel: LiveVoiceModel? = null,
     /** The user's own skills, listed after the built-in ones when "/" is typed. */
     val userSkills: List<Skill> = emptyList(),
+    /** Use a Heretic build of LFM3-1.7B from [hereticTextRepo] instead of the standard one. */
+    val hereticText: Boolean = false,
+    val hereticTextRepo: String = "",
+    /** Use a Heretic build of Omni from [hereticMediaRepo] instead of the standard one. */
+    val hereticMedia: Boolean = false,
+    val hereticMediaRepo: String = "",
 ) {
+    /** The text model chosen in Settings: Heretic when on with a valid repo, else standard. */
+    val textModel: ModelSpec get() = Heretic.chosen(ACTIVE_MODEL, hereticText, hereticTextRepo)
+
+    val mediaModel: ModelSpec get() = Heretic.chosen(MEDIA_MODEL, hereticMedia, hereticMediaRepo)
+
     companion object {
         const val DEFAULT_TEMPERATURE = 0.3f
         const val MAX_TEMPERATURE = 1.5f
@@ -73,6 +88,10 @@ class SettingsRepository(context: Context) {
                 useNpu = prefs[USE_NPU] ?: false,
                 liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
                 userSkills = Skills.decode(prefs[USER_SKILLS]),
+                hereticText = prefs[HERETIC_TEXT] ?: false,
+                hereticTextRepo = prefs[HERETIC_TEXT_REPO] ?: "",
+                hereticMedia = prefs[HERETIC_MEDIA] ?: false,
+                hereticMediaRepo = prefs[HERETIC_MEDIA_REPO] ?: "",
             )
         }
         .distinctUntilChanged()
@@ -100,6 +119,10 @@ class SettingsRepository(context: Context) {
             it[USE_NPU] = value.useNpu
             value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
             it[USER_SKILLS] = Skills.encode(value.userSkills)
+            it[HERETIC_TEXT] = value.hereticText
+            it[HERETIC_TEXT_REPO] = value.hereticTextRepo.trim()
+            it[HERETIC_MEDIA] = value.hereticMedia
+            it[HERETIC_MEDIA_REPO] = value.hereticMediaRepo.trim()
         }
     }
 
@@ -146,6 +169,10 @@ class SettingsRepository(context: Context) {
         val WEB_SEARCH = booleanPreferencesKey("web_search")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val USER_SKILLS = stringPreferencesKey("user_skills")
+        val HERETIC_TEXT = booleanPreferencesKey("heretic_text")
+        val HERETIC_TEXT_REPO = stringPreferencesKey("heretic_text_repo")
+        val HERETIC_MEDIA = booleanPreferencesKey("heretic_media")
+        val HERETIC_MEDIA_REPO = stringPreferencesKey("heretic_media_repo")
         val THINK = booleanPreferencesKey("think")
         val THINK_BUDGET = intPreferencesKey("think_budget")
         val USE_NPU = booleanPreferencesKey("use_npu")

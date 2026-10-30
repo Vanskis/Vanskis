@@ -59,7 +59,7 @@ class ModelInstaller(
     fun resolve(spec: ModelSpec): RepoFile {
         resolvedPair(spec)?.let { return it.first }
         val files = HuggingFace.parseTree(http.fetchText(HuggingFace.treeUrl(spec.repo, baseUrl)))
-        val pick = HuggingFace.selectGguf(files, spec.quant)
+        val pick = (listOf(spec.quant) + spec.fallbackQuants).firstNotNullOfOrNull { HuggingFace.selectGguf(files, it) }
             ?: throw IOException("No ${spec.quant} GGUF found in ${spec.repo}")
         val proj = spec.mmprojQuants?.let {
             HuggingFace.selectMmproj(files, it) ?: throw IOException("No mmproj GGUF found in ${spec.repo}")

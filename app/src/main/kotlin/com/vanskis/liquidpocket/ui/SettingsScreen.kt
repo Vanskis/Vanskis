@@ -49,6 +49,10 @@ import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.core.Heretic
+import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.download.DownloadStatus
+import com.vanskis.liquidpocket.ui.components.HereticPicker
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.AppTheme
@@ -311,10 +315,51 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
 
+            Text("Model builds", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+            HereticChoice(vm, ACTIVE_MODEL, settings.hereticText, settings.hereticTextRepo, media = false)
+            HereticChoice(vm, MEDIA_MODEL, settings.hereticMedia, settings.hereticMediaRepo, media = true)
+
             OutlinedButton(onClick = onManageModel, modifier = Modifier.padding(top = 24.dp)) { Text("Manage model") }
         }
     }
 }
+
+/** Standard or Heretic for [base], with the Heretic build's download state and button. */
+@Composable
+private fun HereticChoice(vm: SettingsViewModel, base: ModelSpec, use: Boolean, repo: String, media: Boolean) {
+    val valid = Heretic.isRepo(repo)
+    val spec = Heretic.spec(base, if (valid) repo else "none/none")
+    val status by remember(spec.id) { vm.downloadStatus(spec) }.collectAsStateWithLifecycle(DownloadStatus.NotDownloaded(0))
+    val shown = use && valid
+    HereticPicker(
+        model = base.displayName,
+        heretic = use,
+        repo = repo,
+        repoValid = valid,
+        onChange = { heretic, text -> vm.setHeretic(media, heretic, text) },
+        status = if (shown) downloadLine(status) else null,
+        action = when {
+            !shown || status == DownloadStatus.Ready -> null
+            status.active -> "Cancel"
+            else -> "Download"
+        },
+        onAction = { if (status.active) vm.cancelDownload(spec) else vm.download(spec) },
+        modifier = Modifier.padding(top = 8.dp),
+    )
+}
+
+private fun downloadLine(status: DownloadStatus): String = when (status) {
+    is DownloadStatus.NotDownloaded ->
+        if (status.partialBytes > 0) "Paused at ${status.partialBytes / 1_000_000} MB." else "Not downloaded."
+    DownloadStatus.Waiting -> "Waiting for Wi-Fi."
+    DownloadStatus.Resolving -> "Looking up the repo…"
+    is DownloadStatus.Downloading -> "Downloading ${percent(status.bytes, status.total)}%"
+    is DownloadStatus.Verifying -> "Checking the file…"
+    DownloadStatus.Ready -> "Downloaded; used from the next reply."
+    is DownloadStatus.Failed -> status.message
+}
+
+private fun percent(bytes: Long, total: Long) = if (total > 0) (bytes * 100 / total).toInt() else 0
 
 @Composable
 private fun VoiceEngineOption(label: String, detail: String, selected: Boolean, onSelect: () -> Unit, enabled: Boolean = true) {

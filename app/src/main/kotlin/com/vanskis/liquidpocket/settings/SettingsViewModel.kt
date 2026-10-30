@@ -10,11 +10,13 @@ import com.vanskis.liquidpocket.chat.Skill
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -69,7 +71,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Whether Omni is installed, which live voice needs to use it. */
     val omniInstalled: StateFlow<Boolean> =
-        graph.downloads.status(MEDIA_MODEL).map { it == DownloadStatus.Ready }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        graph.downloads.usable(settings.map { it.mediaModel }, MEDIA_MODEL).stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     fun setContextSize(value: Int) = edit { it.copy(contextSize = ContextSize.clamp(value)) }
 
@@ -92,6 +94,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setUseNpu(value: Boolean) = edit { it.copy(useNpu = value) }
 
     fun setUserSkills(value: List<Skill>) = edit { it.copy(userSkills = value) }
+
+    fun setHeretic(media: Boolean, use: Boolean, repo: String) = edit {
+        if (media) it.copy(hereticMedia = use, hereticMediaRepo = repo) else it.copy(hereticText = use, hereticTextRepo = repo)
+    }
+
+    fun downloadStatus(spec: ModelSpec): Flow<DownloadStatus> = graph.downloads.status(spec)
+
+    /** Waits for Wi-Fi, as the first download does: these are over a gigabyte. */
+    fun download(spec: ModelSpec) = graph.downloads.download(spec, allowMetered = false)
+
+    fun cancelDownload(spec: ModelSpec) = graph.downloads.cancel(spec)
 
     private fun edit(change: (AppSettings) -> AppSettings) {
         edits.value = edits.value + change

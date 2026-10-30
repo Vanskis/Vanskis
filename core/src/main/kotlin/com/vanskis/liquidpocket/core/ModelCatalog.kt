@@ -15,6 +15,8 @@ data class ModelSpec(
      * order of preference (case-insensitive); the smallest mmproj is used if none match.
      */
     val mmprojQuants: List<String>? = null,
+    /** Tried in order when no model file matches [quant]. */
+    val fallbackQuants: List<String> = emptyList(),
 )
 
 object ModelCatalog {

@@ -19,6 +19,7 @@ import com.vanskis.liquidpocket.MainActivity
 import com.vanskis.liquidpocket.R
 import com.vanskis.liquidpocket.core.ChecksumMismatchException
 import com.vanskis.liquidpocket.core.DownloadCancelledException
+import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.HttpStatusException
 import com.vanskis.liquidpocket.core.InstallProgress
 import com.vanskis.liquidpocket.core.ModelCatalog
@@ -35,7 +36,7 @@ import java.io.IOException
 class ModelDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val spec = inputData.getString(KEY_MODEL_ID)?.let { ModelCatalog.byId(it) }
+        val spec = inputData.getString(KEY_MODEL_ID)?.let { ModelCatalog.byId(it) ?: Heretic.byId(it, inputData.getString(KEY_REPO)) }
             ?: return Result.failure(errorData("Unknown model"))
         val installer = (applicationContext as LiquidPocketApp).installer
         try {
@@ -114,6 +115,8 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
 
     companion object {
         const val KEY_MODEL_ID = "model_id"
+        /** The repo of a Heretic build, which is not in the catalog. */
+        const val KEY_REPO = "repo"
         const val KEY_ERROR = "error"
         private const val KEY_PHASE = "phase"
         private const val KEY_BYTES = "bytes"
