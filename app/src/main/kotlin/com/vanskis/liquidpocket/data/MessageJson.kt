@@ -38,7 +38,7 @@ object MessageJson {
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
     /**
-     * `{"thinking": "...", "thinkingMillis": 1234, "summary": true}`, a key left out when null (or
+     * `{"thinking": "...", "thinkingMillis": 1234, "summary": true, "caption": "..."}`, a key left out when null (or
      * false, for `summary`). No extras is stored as null.
      */
     fun encodeExtras(extras: MessageExtras): String? =
@@ -46,6 +46,7 @@ object MessageJson {
             extras.thinking?.let { put("thinking", it) }
             extras.thinkingMillis?.let { put("thinkingMillis", it) }
             if (extras.summary) put("summary", true)
+            extras.caption?.let { put("caption", it) }
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -57,6 +58,7 @@ object MessageJson {
                 thinking = obj["thinking"]?.jsonPrimitive?.takeIf { it.isString }?.content,
                 thinkingMillis = obj["thinkingMillis"]?.jsonPrimitive?.longOrNull,
                 summary = obj["summary"]?.jsonPrimitive?.booleanOrNull == true,
+                caption = obj["caption"]?.jsonPrimitive?.takeIf { it.isString }?.content,
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -71,8 +73,14 @@ object MessageJson {
 
 /**
  * What a saved message keeps beyond its own columns: the reasoning of an assistant reply and how
- * long it took, and whether the message summarizes the turns before it ([com.vanskis.liquidpocket.chat.Turn.summary]).
+ * long it took, whether the message summarizes the turns before it ([com.vanskis.liquidpocket.chat.Turn.summary]),
+ * and the hidden caption of a user message's photos ([com.vanskis.liquidpocket.chat.Turn.caption]).
  */
-data class MessageExtras(val thinking: String? = null, val thinkingMillis: Long? = null, val summary: Boolean = false) {
-    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null && !summary
+data class MessageExtras(
+    val thinking: String? = null,
+    val thinkingMillis: Long? = null,
+    val summary: Boolean = false,
+    val caption: String? = null,
+) {
+    val isEmpty: Boolean get() = thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty()
 }

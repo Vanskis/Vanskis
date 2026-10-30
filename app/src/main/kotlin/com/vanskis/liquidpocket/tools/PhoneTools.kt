@@ -13,7 +13,7 @@ fun phoneTools(app: LiquidPocketApp, gate: PermissionGate, webSearch: () -> Bool
     CalendarLookupTool(app, gate),
     ContactsLookupTool(app, gate),
     SearchPhotosTool(app, gate),
-    LookAtPhotosTool(app, gate, app.engine),
+    LookAtPhotosTool(app, gate),
     ListNotesTool(app.database.noteDao()),
     CreateEventTool(app, gate),
     CreateReminderTool(app, gate),

@@ -41,6 +41,15 @@ class MessageJsonTest {
         assertEquals(MessageExtras(), MessageJson.decodeExtras("""{"summary":"yes"}"""))
     }
 
+    @Test fun `a photo caption round-trips`() {
+        val captioned = MessageExtras(caption = "A tabby cat on a \"red\" sofa.")
+        assertTrue(!captioned.isEmpty)
+        assertEquals(captioned, MessageJson.decodeExtras(MessageJson.encodeExtras(captioned)))
+        val all = MessageExtras("hm", 12L, summary = false, caption = "A cat.")
+        assertEquals(all, MessageJson.decodeExtras(MessageJson.encodeExtras(all)))
+        assertEquals(MessageExtras(), MessageJson.decodeExtras("""{"caption": 3}"""))
+    }
+
     @Test fun `no extras is stored as null`() {
         assertNull(MessageJson.encodeExtras(MessageExtras()))
         assertNull(MessageJson.encodeExtras(MessageExtras(thinking = "")))

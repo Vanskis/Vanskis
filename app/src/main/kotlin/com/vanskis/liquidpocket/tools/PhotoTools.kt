@@ -7,7 +7,6 @@ import android.graphics.ImageDecoder
 import android.provider.BaseColumns
 import android.provider.MediaStore
 import android.provider.MediaStore.MediaColumns
-import com.vanskis.liquidpocket.engine.Engine
 import com.vanskis.liquidpocket.engine.ImageInput
 import java.time.Instant
 import java.time.LocalDateTime
@@ -111,9 +110,10 @@ class SearchPhotosTool(private val context: Context, private val gate: Permissio
 
 /**
  * Shows the model photos by id: each is decoded fitted within [PhotoPixels.MAX_SIDE] and handed
- * over as pixels. Only when the loaded model has vision.
+ * over as pixels. A loaded model that cannot see gets their captions instead, see
+ * [com.vanskis.liquidpocket.chat.ChatController].
  */
-class LookAtPhotosTool(private val context: Context, private val gate: PermissionGate, private val engine: Engine) : JsonTool(
+class LookAtPhotosTool(private val context: Context, private val gate: PermissionGate) : JsonTool(
     "look_at_photos",
     "Look at up to $MAX_PHOTOS photos by the ids search_photos returned. The photos are shown to you right after.",
     """
@@ -127,9 +127,6 @@ class LookAtPhotosTool(private val context: Context, private val gate: Permissio
         if (args.strings("ids").none { it.toLongOrNull() != null }) "ids must be photo ids from search_photos" else null
 
     override suspend fun run(args: JsonObject): ToolResult {
-        if (!engine.capabilities.value.vision) {
-            return ToolResult(ToolResults.error("Vision is not available: the loaded model cannot see images."))
-        }
         if (!gate.ensure(Manifest.permission.READ_MEDIA_IMAGES)) return ToolResults.permissionDenied(PHOTOS)
         val ids = args.strings("ids").mapNotNull { it.toLongOrNull() }.distinct().take(MAX_PHOTOS)
         val shown = mutableListOf<Long>()

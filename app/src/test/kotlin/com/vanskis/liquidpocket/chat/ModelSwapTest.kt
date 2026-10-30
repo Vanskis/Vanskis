@@ -49,6 +49,13 @@ class ModelSwapTest {
         var failLoadOf: String? = null
         /** When set, the next reply waits for it (or for [stop]) after its first text. */
         var hold: CompletableDeferred<Unit>? = null
+        /** Per caption request ([PhotoCaptions.PROMPT]): the model loaded, the messages and the params. */
+        val captions = mutableListOf<Triple<String, List<ChatMessage>, GenerationParams>>()
+        /** What a caption request answers; empty gives no caption. */
+        var captionText = ""
+        var captionFailure: Exception? = null
+        /** When set, the next caption waits for it (or for [stop]) after its text. */
+        var captionHold: CompletableDeferred<Unit>? = null
 
         val loaded: String? get() = (state.value as? EngineState.Ready)?.modelPath
 
@@ -68,9 +75,18 @@ class ModelSwapTest {
 
         override fun stop() {
             hold?.complete(Unit)
+            captionHold?.complete(Unit)
         }
 
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
+            if (messages.last().content == PhotoCaptions.PROMPT) {
+                captions += Triple(loaded ?: "none", messages, params)
+                if (!capabilities.value.vision) throw EngineException("The loaded model cannot see images")
+                captionFailure?.let { throw it }
+                if (captionText.isNotEmpty()) emit(ReplyChunk.Text(captionText))
+                captionHold?.let { it.await(); captionHold = null }
+                return@flow
+            }
             chats += (loaded ?: "none") to params
             sent += messages
             // As the native engine does, a model refuses media it cannot take.
@@ -126,8 +142,16 @@ class ModelSwapTest {
             ToolResult("""{"photos":1}""", images = listOf(ImageInput(1, 1, ByteArray(3))))
     }
 
+    private class Sink : ReplySink {
+        val audio = mutableListOf<FloatArray>()
+        val finished = mutableListOf<String>()
+        override fun audio(samples: FloatArray) { audio += samples }
+        override fun finished(text: String, completed: Boolean, spoke: Boolean) { finished += text }
+    }
+
     private val engine = SwapEngine()
     private val store = Store()
+    private val sink = Sink()
     private val models = Models()
     private val photos = PhotoTool()
     private val params = GenerationParams(tools = listOf(photos.spec), speak = true)
@@ -135,7 +159,7 @@ class ModelSwapTest {
     private val voice = listOf(Attachment("/v.wav", AttachmentKind.AUDIO))
 
     private fun TestScope.controller() =
-        ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(photos), media = Media(), models = models)
+        ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(photos), media = Media(), sink = sink, models = models)
 
     @Test fun `a text turn loads the text model and is answered there`() = runTest {
         val c = controller()
@@ -334,6 +358,101 @@ class ModelSwapTest {
         assertEquals(listOf("What is this?", "A tabby cat, about two years old."), s.turns.map { it.text })
         assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
         assertFalse(s.busy)
+    }
+
+    @Test fun `the media model captions the photos it answered about, saved on the turn and never streamed or spoken`() = runTest {
+        engine.captionText = "A tabby cat asleep on a red sofa."
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+
+        val (model, request, captionParams) = engine.captions.single()
+        assertEquals(MEDIA.path, model)
+        assertEquals(PhotoCaptions.PROMPT, request.single().content)
+        assertEquals(1, request.single().images.size)
+        assertFalse(captionParams.think)
+        assertFalse(captionParams.speak)
+        assertEquals(80, captionParams.maxNewTokens)
+        val s = c.state.value
+        assertEquals(listOf("What is this?", "Done"), s.turns.map { it.text })
+        assertEquals("A tabby cat asleep on a red sofa.", s.turns[0].caption)
+        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
+        assertEquals("only the reply reaches the sink", listOf("Done"), sink.finished)
+        assertTrue(sink.audio.isEmpty())
+        assertNull(s.error)
+        assertFalse(s.busy)
+    }
+
+    @Test fun `a later text turn sends the text model the caption in place of the photo`() = runTest {
+        engine.captionText = "A tabby cat asleep on a red sofa."
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        c.send("And how old is it?", params)
+        advanceUntilIdle()
+
+        assertEquals(TEXT.path, engine.chats.last().first)
+        val earlier = engine.sent.last().first { it.role == Role.USER }
+        assertEquals("What is this?\n\n[Photo: A tabby cat asleep on a red sofa.]", earlier.content)
+        assertTrue(earlier.images.isEmpty())
+        assertEquals("the photo turn is captioned once", 1, engine.captions.size)
+    }
+
+    @Test fun `look_at_photos on the text model has the media model caption the photos, then swaps back`() = runTest {
+        engine.captionText = "A cat on a sofa."
+        engine.replies += "" to listOf(ToolCall("look_at_photos", "{}"))
+        engine.replies += "Here is your cat." to emptyList()
+        val c = controller()
+        c.send("Find my cat photo", params)
+        advanceUntilIdle()
+
+        assertEquals(listOf(TEXT.path, MEDIA.path, TEXT.path), engine.loads)
+        assertEquals(MEDIA.path, engine.captions.single().first)
+        assertEquals(listOf(TEXT.path, TEXT.path), engine.chats.map { it.first })
+        val s = c.state.value
+        val shown = s.turns.single { it.fromTool }
+        assertEquals("Photos from look_at_photos:\n[Photo: A cat on a sofa.]", shown.text)
+        assertTrue(shown.images.isEmpty())
+        val second = engine.sent.last()
+        assertTrue(second.none { it.images.isNotEmpty() })
+        assertTrue(second.any { it.content.endsWith("[Photo: A cat on a sofa.]") })
+        assertEquals("Here is your cat.", s.turns.last().text)
+        assertNull(s.error)
+        assertFalse(s.busy)
+    }
+
+    @Test fun `a caption that fails leaves the reply as it was`() = runTest {
+        engine.captionFailure = EngineException("out of memory")
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+
+        assertEquals(1, engine.captions.size)
+        val s = c.state.value
+        assertEquals(listOf("What is this?", "Done"), s.turns.map { it.text })
+        assertNull(s.turns[0].caption)
+        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
+        assertEquals(listOf("Done"), sink.finished)
+        assertNull(s.error)
+        assertFalse(s.busy)
+    }
+
+    @Test fun `stop during a caption drops it`() = runTest {
+        engine.captionText = "A tabby"
+        engine.captionHold = CompletableDeferred()
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        assertEquals(1, engine.captions.size)
+        assertEquals("Done", c.state.value.turns.last().text)
+
+        c.stop()
+        advanceUntilIdle()
+
+        assertNull(engine.captionHold)
+        val s = c.state.value
+        assertNull(s.turns[0].caption)
+        assertNull(store.saved.getValue(s.conversationId!!)[0].caption)
     }
 
     private companion object {
