@@ -49,6 +49,8 @@ class ModelSwapTest {
         var failLoadOf: String? = null
         /** When set, the next reply waits for it (or for [stop]) after its first text. */
         var hold: CompletableDeferred<Unit>? = null
+        /** When set, the next reply waits for it (or for [stop]) before its first text. */
+        var holdBeforeText: CompletableDeferred<Unit>? = null
         /** Per caption request ([PhotoCaptions.PROMPT]): the model loaded, the messages and the params. */
         val captions = mutableListOf<Triple<String, List<ChatMessage>, GenerationParams>>()
         /** What a caption request answers; empty gives no caption. */
@@ -75,6 +77,7 @@ class ModelSwapTest {
 
         override fun stop() {
             hold?.complete(Unit)
+            holdBeforeText?.complete(Unit)
             captionHold?.complete(Unit)
         }
 
@@ -97,6 +100,7 @@ class ModelSwapTest {
                 throw EngineException("The loaded model cannot hear audio")
             }
             val (text, calls) = replies.removeFirstOrNull() ?: ("Done" to emptyList())
+            holdBeforeText?.let { it.await(); holdBeforeText = null }
             if (text.isNotEmpty()) emit(ReplyChunk.Text(text))
             hold?.let { it.await(); hold = null }
             calls.forEach { emit(ReplyChunk.ToolCall(it)) }
@@ -453,6 +457,34 @@ class ModelSwapTest {
         val s = c.state.value
         assertNull(s.turns[0].caption)
         assertNull(store.saved.getValue(s.conversationId!!)[0].caption)
+    }
+
+    @Test fun `a turn sent while the last reply captions its photos stays generating until its own reply ends`() = runTest {
+        engine.captionText = "A tabby"
+        val caption = CompletableDeferred<Unit>()
+        engine.captionHold = caption
+        val c = controller()
+        c.send("What is this?", params, photo)
+        advanceUntilIdle()
+        assertFalse("the caption does not keep the user waiting", c.state.value.busy)
+
+        val reply = CompletableDeferred<Unit>()
+        engine.holdBeforeText = reply
+        engine.replies += "Its name is Tom." to emptyList()
+        assertTrue(c.send("What is its name?", params))
+        caption.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue("the second reply is still under way", c.state.value.generating)
+        assertFalse("nothing else can be sent meanwhile", c.send("Hello?", params))
+        reply.complete(Unit)
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertFalse(s.busy)
+        assertEquals(listOf("What is this?", "Done", "What is its name?", "Its name is Tom."), s.turns.map { it.text })
+        assertEquals("A tabby", s.turns[0].caption)
+        assertEquals(s.turns, store.saved.getValue(s.conversationId!!))
     }
 
     private companion object {

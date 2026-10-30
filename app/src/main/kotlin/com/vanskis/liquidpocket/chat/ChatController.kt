@@ -350,6 +350,7 @@ class ChatController(
         val dropped = before.turns.size > keep
         stopRequested = false
         lastParams = params
+        val id = ++newestReply
         _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, error = null) }
         after { previous ->
             previous?.join()
@@ -382,10 +383,14 @@ class ChatController(
                 if (!stopRequested) captionPhotos(conversationId)
                 refreshContextUsed(system, params)
             } finally {
-                _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
+                // A reply sent while this one captioned its photos owns the streaming state by now.
+                if (newestReply == id) _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
             }
         }
     }
+
+    /** Counts [reply] calls; each operation clears the streaming state only while its reply is the newest. */
+    private var newestReply = 0L
 
     /** The system prompt for a reply with [params]: the remembered facts, tool guidance and custom instructions. */
     private suspend fun systemMessage(params: GenerationParams): ChatMessage {
