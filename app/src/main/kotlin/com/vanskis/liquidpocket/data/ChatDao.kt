@@ -6,6 +6,9 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
+/** A conversation that matches a search; [text] is its first matching message, null when only the title matched. */
+data class SearchRow(val conversationId: Long, val title: String, val text: String?)
+
 /** Use [appendMessage] and [deleteConversation]: the single-statement writes they wrap are public only for Room. */
 @Dao
 abstract class ChatDao {
@@ -26,6 +29,24 @@ abstract class ChatDao {
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id")
     abstract suspend fun messages(conversationId: Long): List<MessageEntity>
+
+    @Query("SELECT title FROM conversations WHERE id = :id")
+    abstract suspend fun title(id: Long): String?
+
+    /**
+     * Conversations whose title or any message matches [pattern] (a LIKE pattern from
+     * [com.vanskis.liquidpocket.chat.ChatSearch.likePattern]), newest first. SQLite's LIKE ignores
+     * case for ASCII only.
+     */
+    @Query(
+        "SELECT c.id AS conversationId, c.title AS title, " +
+            "(SELECT m.text FROM messages m WHERE m.conversationId = c.id AND m.text LIKE :pattern ESCAPE '\\' " +
+            "ORDER BY m.id LIMIT 1) AS text " +
+            "FROM conversations c WHERE c.title LIKE :pattern ESCAPE '\\' OR EXISTS " +
+            "(SELECT 1 FROM messages m WHERE m.conversationId = c.id AND m.text LIKE :pattern ESCAPE '\\') " +
+            "ORDER BY c.updatedAt DESC, c.id DESC LIMIT :limit",
+    )
+    abstract suspend fun search(pattern: String, limit: Int): List<SearchRow>
 
     @Insert
     abstract suspend fun insertMessage(message: MessageEntity): Long

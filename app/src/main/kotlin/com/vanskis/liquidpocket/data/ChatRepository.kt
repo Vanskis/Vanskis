@@ -1,5 +1,8 @@
 package com.vanskis.liquidpocket.data
 
+import com.vanskis.liquidpocket.chat.ChatExport
+import com.vanskis.liquidpocket.chat.ChatSearch
+import com.vanskis.liquidpocket.chat.ChatSearchHit
 import com.vanskis.liquidpocket.chat.ChatStore
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ConversationTitle
@@ -40,6 +43,20 @@ class ChatRepository(
 
     suspend fun rename(conversationId: Long, title: String) {
         dao.rename(conversationId, title.trim().ifEmpty { ConversationTitle.UNTITLED })
+    }
+
+    /** Conversations whose title or any message contains [query], ignoring case; empty for a blank query. */
+    suspend fun search(query: String, limit: Int = 50): List<ChatSearchHit> {
+        if (query.isBlank()) return emptyList()
+        return dao.search(ChatSearch.likePattern(query), limit).map {
+            ChatSearchHit(it.conversationId, it.title, it.text?.let { text -> ChatSearch.snippet(text, query) })
+        }
+    }
+
+    /** The conversation as Markdown, or null if it no longer exists. */
+    suspend fun export(conversationId: Long): String? {
+        val title = dao.title(conversationId) ?: return null
+        return ChatExport.toMarkdown(title, turns(conversationId))
     }
 
     override suspend fun factTexts(): List<String> = dao.factTexts()

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -22,17 +23,32 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.vanskis.liquidpocket.chat.ChatSearch
+import com.vanskis.liquidpocket.chat.ChatSearchHit
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ConversationTitle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-/** The drawer's contents: New chat, then the saved conversations, newest first. */
+/**
+ * The drawer's contents: New chat, a search field, then the saved conversations, newest first. While
+ * the search field has text, matching conversations (from [onSearch]) replace the list. [onExport]
+ * gives a conversation as Markdown for the item menu's Share and Copy all.
+ */
 @Composable
 fun ConversationDrawer(
     conversations: List<Conversation>,
@@ -41,11 +57,30 @@ fun ConversationDrawer(
     onOpen: (Long) -> Unit,
     onRename: (Long, String) -> Unit,
     onDelete: (Long) -> Unit,
+    onSearch: suspend (String) -> List<ChatSearchHit>,
+    onExport: suspend (Long) -> String?,
+    onShare: (title: String, markdown: String) -> Unit,
+    onCopyAll: (markdown: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var renaming by remember { mutableStateOf<Conversation?>(null) }
     var deleting by remember { mutableStateOf<Conversation?>(null) }
     val itemPadding = NavigationDrawerItemDefaults.ItemPadding
+    val scope = rememberCoroutineScope()
+    var query by rememberSaveable { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<ChatSearchHit>>(emptyList()) }
+    val searching = query.isNotBlank()
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            hits = emptyList()
+        } else {
+            delay(ChatSearch.DEBOUNCE_MILLIS)
+            hits = runCatching { onSearch(query) }.getOrDefault(emptyList())
+        }
+    }
+    fun export(id: Long, deliver: (String) -> Unit) {
+        scope.launch { onExport(id)?.let(deliver) }
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -60,8 +95,48 @@ fun ConversationDrawer(
             onClick = onNewChat,
             modifier = Modifier.padding(itemPadding),
         )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            placeholder = { Text("Search chats") },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 4.dp),
+        )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
-        if (conversations.isEmpty()) {
+        if (searching) {
+            if (hits.isEmpty()) {
+                Text(
+                    "No chats match.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
+                )
+            }
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(hits, key = { it.conversationId }) { hit ->
+                    NavigationDrawerItem(
+                        label = {
+                            Column {
+                                Text(highlighted(hit.title, query), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                hit.snippet?.let {
+                                    Text(
+                                        highlighted(it, query),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        },
+                        selected = hit.conversationId == selectedId,
+                        onClick = { onOpen(hit.conversationId) },
+                        modifier = Modifier.padding(itemPadding),
+                    )
+                }
+            }
+        } else if (conversations.isEmpty()) {
             Text(
                 "Your chats are saved on this phone and listed here.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -69,7 +144,7 @@ fun ConversationDrawer(
                 modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
             )
         }
-        LazyColumn(modifier = Modifier.weight(1f)) {
+        if (!searching) LazyColumn(modifier = Modifier.weight(1f)) {
             items(conversations, key = { it.id }) { conversation ->
                 ConversationItem(
                     conversation = conversation,
@@ -77,7 +152,8 @@ fun ConversationDrawer(
                     onOpen = { onOpen(conversation.id) },
                     onRename = { renaming = conversation },
                     onDelete = { deleting = conversation },
-                    modifier = Modifier.padding(itemPadding),
+                    onShare = { export(conversation.id) { onShare(conversation.title, it) } },
+                    onCopyAll = { export(conversation.id, onCopyAll) },
                 )
             }
         }
@@ -117,6 +193,8 @@ private fun ConversationItem(
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onShare: () -> Unit,
+    onCopyAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -132,6 +210,8 @@ private fun ConversationItem(
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onRename() })
+                    DropdownMenuItem(text = { Text("Share") }, onClick = { menuOpen = false; onShare() })
+                    DropdownMenuItem(text = { Text("Copy all") }, onClick = { menuOpen = false; onCopyAll() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDelete() })
                 }
             }
@@ -156,4 +236,17 @@ private fun RenameDialog(current: String, onDismiss: () -> Unit, onConfirm: (Str
         confirmButton = { TextButton(onClick = { onConfirm(title) }, enabled = title.isNotBlank()) { Text("Rename") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** [text] with the first case-insensitive match of [query] in bold. */
+private fun highlighted(text: String, query: String) = buildAnnotatedString {
+    val q = query.trim()
+    val at = if (q.isEmpty()) -1 else text.indexOf(q, ignoreCase = true)
+    if (at < 0) {
+        append(text)
+    } else {
+        append(text.substring(0, at))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text.substring(at, at + q.length)) }
+        append(text.substring(at + q.length))
+    }
 }
