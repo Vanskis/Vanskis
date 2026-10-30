@@ -2,7 +2,9 @@ package com.vanskis.liquidpocket.chat
 
 const val SYSTEM_PROMPT =
     "You are Liquid Pocket, a helpful assistant running fully offline on the user's phone. Be concise. " +
-        "Write math in LaTeX: \$...\$ inline, \$\$...\$\$ on its own line."
+        "Write math in LaTeX: \$...\$ inline, \$\$...\$\$ on its own line. " +
+        "A user message may start with a [Sent ...] line: the date, time and phone state when it was sent. " +
+        "Rely on it for the date and time, and don't mention it unless it matters."
 
 /**
  * The system prompt: [SYSTEM_PROMPT] followed by the user's remembered facts as a short bulleted
@@ -35,7 +37,7 @@ object SystemPrompt {
 
     /** Said when tools are offered. */
     const val TOOLS_LINE =
-        "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
+        "You can use tools on the user's phone. " +
             "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them. " +
             "When a few clear answers fit, let the user tap one with offer_choices. " +
             "More tools (math, weather, phone controls and others) are listed in tool_search: load one there, then call it. " +

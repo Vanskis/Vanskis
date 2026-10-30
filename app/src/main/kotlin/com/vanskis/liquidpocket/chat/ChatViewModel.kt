@@ -109,6 +109,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         documents = DocumentLoader(graph.documents::load), sink = sink, models = models,
         customInstructions = { settings.value.customInstructions },
         accelerator = { if (settings.value.useNpu) Accelerator.NPU else Accelerator.CPU },
+        environment = PhoneStateProbe(app, { graph.engine.state.value })::line,
     )
 
     val state: StateFlow<ChatState> = controller.state

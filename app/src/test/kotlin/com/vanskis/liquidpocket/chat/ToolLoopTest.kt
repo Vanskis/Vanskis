@@ -260,6 +260,20 @@ class ToolLoopTest {
         assertEquals("Done", c.state.value.turns.last().text)
     }
 
+    @Test fun `each message is sent with the phone state from when it was sent`() = runTest {
+        var line = "[first]"
+        val c = ChatController(engine, store, this, StandardTestDispatcher(testScheduler), listOf(clock), environment = { line })
+        c.send("hi", params)
+        advanceUntilIdle()
+        line = "[second]"
+        c.send("and now?", params)
+        advanceUntilIdle()
+
+        assertEquals(listOf("[first]\nhi", "Done", "[second]\nand now?"), engine.sent[1].drop(1).map { it.content })
+        assertEquals("hi", c.state.value.turns[0].text)
+        assertEquals("[first]", store.saved.getValue(c.state.value.conversationId!!)[0].context)
+    }
+
     @Test fun `a tool loaded with tool_search is offered in full from then on`() = runTest {
         engine.replies += "" to listOf(call(ToolCatalog.SEARCH, """{"names":["create_note"]}"""))
         engine.replies += "Loaded." to emptyList()

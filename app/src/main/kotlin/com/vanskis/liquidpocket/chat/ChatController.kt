@@ -122,6 +122,8 @@ class ChatController(
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val customInstructions: () -> String = { "" },
     private val accelerator: () -> Accelerator = { Accelerator.CPU },
+    /** The [EnvironmentAnchor] line saved with each message the user sends; null for none. */
+    private val environment: () -> String? = { null },
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -226,7 +228,7 @@ class ChatController(
         val prompt = text.trim()
         val now = _state.value
         if ((prompt.isEmpty() && attachments.isEmpty()) || busy(now)) return false
-        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments), params = withThink(params))
+        reply(keep = now.turns.size, newUser = Turn(Role.USER, prompt, attachments = attachments, context = environment()), params = withThink(params))
         return true
     }
 
@@ -244,7 +246,7 @@ class ChatController(
         val now = _state.value
         val last = now.lastUserIndex
         if (prompt.isEmpty() || last < 0 || busy(now)) return
-        val edited = now.turns[last].copy(text = prompt)
+        val edited = now.turns[last].copy(text = prompt, context = environment())
         reply(keep = last, newUser = edited, params = withThink(params))
     }
 
@@ -756,6 +758,7 @@ class ChatController(
     private fun Turn.toMessage(caps: Capabilities, question: String): ChatMessage {
         // Tool photos (on a user turn from a tool) are kept as pixels in memory and sent as they are,
         // or as a note to a model that cannot see them (the text model). Thinking is never sent back.
+        val text = if (role == Role.USER) EnvironmentAnchor.prefixed(context, text) else text
         if (role != Role.USER || attachments.isEmpty()) {
             val unseen = images.isNotEmpty() && !caps.vision
             return ChatMessage(
@@ -771,7 +774,8 @@ class ChatController(
         val notes = mutableListOf<String>()
         val docs = mutableListOf<String>()
         // A follow-up's words find its passages; this turn's own words keep what it asked about.
-        val query = if (question.isBlank() || question == text) text else "$text\n$question"
+        val asked = this.text
+        val query = if (question.isBlank() || question == asked) asked else "$asked\n$question"
         for (attachment in attachments) {
             when (attachment.kind) {
                 AttachmentKind.IMAGE -> when {

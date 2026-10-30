@@ -37,6 +37,8 @@ data class Turn(
      * it answered the turn. A model that cannot see is sent this in their place. Never shown or spoken.
      */
     val caption: String? = null,
+    /** USER turns: the date, time and phone state when it was sent ([EnvironmentAnchor]). Sent, never shown. */
+    val context: String? = null,
 ) {
     /** A user turn the app added for a tool, not one the user wrote. */
     val fromTool: Boolean get() = role == Role.USER && toolName != null

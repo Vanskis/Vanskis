@@ -43,7 +43,7 @@ object MessageJson {
         objects(json).map { ToolCall(it.string("name"), it.string("arguments")) }
 
     /**
-     * `{"thinking": "...", "thinkingMillis": 1234, "thinkingTokens": 340, "summary": true, "caption": "..."}`, a key left out when null (or
+     * `{"thinking": "...", "thinkingMillis": 1234, "thinkingTokens": 340, "summary": true, "caption": "...", "context": "..."}`, a key left out when null (or
      * false, for `summary`). No extras is stored as null.
      */
     fun encodeExtras(extras: MessageExtras): String? =
@@ -53,6 +53,7 @@ object MessageJson {
             if (extras.summary) put("summary", true)
             extras.caption?.let { put("caption", it) }
             extras.thinkingTokens?.let { put("thinkingTokens", it) }
+            extras.context?.let { put("context", it) }
         }.toString()
 
     /** Malformed or unexpected JSON gives no extras; this never throws. */
@@ -66,6 +67,7 @@ object MessageJson {
                 summary = obj["summary"]?.jsonPrimitive?.booleanOrNull == true,
                 caption = obj["caption"]?.jsonPrimitive?.takeIf { it.isString }?.content,
                 thinkingTokens = obj["thinkingTokens"]?.jsonPrimitive?.intOrNull,
+                context = obj["context"]?.jsonPrimitive?.takeIf { it.isString }?.content,
             )
         } catch (_: Exception) {
             MessageExtras()
@@ -89,7 +91,9 @@ data class MessageExtras(
     val summary: Boolean = false,
     val caption: String? = null,
     val thinkingTokens: Int? = null,
+    val context: String? = null,
 ) {
     val isEmpty: Boolean get() =
-        thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty() && thinkingTokens == null
+        thinking.isNullOrEmpty() && thinkingMillis == null && !summary && caption.isNullOrEmpty() && thinkingTokens == null &&
+            context.isNullOrEmpty()
 }
