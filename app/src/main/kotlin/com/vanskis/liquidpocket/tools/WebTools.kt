@@ -3,10 +3,16 @@ package com.vanskis.liquidpocket.tools
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URI
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.put
 
@@ -34,36 +40,59 @@ object WebTools {
 /** An HTTP answer: [body] is read whatever the status. */
 class HttpResponse(val status: Int, val body: String)
 
-/** GETs a URL with the given headers; throws [IOException] when there is no answer. */
+/** GETs a URL with the given headers; throws [IOException] when there is no answer. Cancelling it abandons the request. */
 fun interface HttpGet {
-    fun get(url: String, headers: Map<String, String>): HttpResponse
+    suspend fun get(url: String, headers: Map<String, String>): HttpResponse
 }
 
-/** [HttpGet] over [HttpURLConnection]: 10 s to connect, 15 s to read, at most [maxBytes] of body. */
+/**
+ * [HttpGet] over [HttpURLConnection]: 10 s to connect, 15 s to read, 20 s in all, at most [maxBytes] of body.
+ * A blocking read ignores thread interrupts, so cancelling (or the overall limit) disconnects the connection instead.
+ */
 class UrlConnectionGet(private val maxBytes: Int = 2_000_000) : HttpGet {
-    override fun get(url: String, headers: Map<String, String>): HttpResponse {
+    override suspend fun get(url: String, headers: Map<String, String>): HttpResponse {
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         try {
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 15_000
-            connection.instanceFollowRedirects = true
-            headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
-            val status = connection.responseCode
-            val stream = (if (status >= 400) connection.errorStream else connection.inputStream)
-                ?: return HttpResponse(status, "")
-            val body = ByteArrayOutputStream()
-            stream.use { input ->
-                val buffer = ByteArray(16 * 1024)
-                while (body.size() < maxBytes) {
-                    val n = input.read(buffer, 0, minOf(buffer.size, maxBytes - body.size()))
-                    if (n < 0) break
-                    body.write(buffer, 0, n)
+            return withTimeout(TOTAL_TIMEOUT_MS) {
+                coroutineScope {
+                    val read = async(Dispatchers.IO) { read(connection, headers) }
+                    try {
+                        read.await()
+                    } catch (e: CancellationException) {
+                        connection.disconnect() // unblocks the read so this scope can finish
+                        throw e
+                    }
                 }
             }
-            return HttpResponse(status, body.toString(Charsets.UTF_8.name()))
+        } catch (e: TimeoutCancellationException) {
+            throw SocketTimeoutException("Timed out after ${TOTAL_TIMEOUT_MS / 1000} s")
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun read(connection: HttpURLConnection, headers: Map<String, String>): HttpResponse {
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 15_000
+        connection.instanceFollowRedirects = true
+        headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
+        val status = connection.responseCode
+        val stream = (if (status >= 400) connection.errorStream else connection.inputStream)
+            ?: return HttpResponse(status, "")
+        val body = ByteArrayOutputStream()
+        stream.use { input ->
+            val buffer = ByteArray(16 * 1024)
+            while (body.size() < maxBytes) {
+                val n = input.read(buffer, 0, minOf(buffer.size, maxBytes - body.size()))
+                if (n < 0) break
+                body.write(buffer, 0, n)
+            }
+        }
+        return HttpResponse(status, body.toString(Charsets.UTF_8.name()))
+    }
+
+    private companion object {
+        const val TOTAL_TIMEOUT_MS = 20_000L
     }
 }
 
