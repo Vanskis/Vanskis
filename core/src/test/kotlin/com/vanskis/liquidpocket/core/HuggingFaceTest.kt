@@ -74,9 +74,10 @@ class HuggingFaceTest {
     }
 
     @Test fun catalogOffersBothAndOnlyOmniHasProjector() {
-        assertEquals(listOf(ModelCatalog.LFM3_OMNI_2B, ModelCatalog.LFM25_8B_A1B), ModelCatalog.offered)
+        assertEquals(listOf(ModelCatalog.LFM3_1_7B, ModelCatalog.LFM3_OMNI_2B), ModelCatalog.offered)
         assertEquals(listOf("Q8_0", "F16", "BF16"), ModelCatalog.LFM3_OMNI_2B.mmprojQuants)
-        assertNull(ModelCatalog.LFM25_8B_A1B.mmprojQuants)
-        assertEquals("LiquidAI/LFM2.5-8B-A1B-GGUF", ModelCatalog.byId("lfm2.5-8b-a1b")?.repo)
+        assertNull(ModelCatalog.LFM3_1_7B.mmprojQuants)
+        assertEquals("LiquidAI/LFM3-1.7B-GGUF", ModelCatalog.byId("lfm3-1.7b")?.repo)
+        assertNull("the retired 8B is gone", ModelCatalog.byId("lfm2.5-8b-a1b"))
     }
 }

@@ -18,6 +18,17 @@ data class ModelSpec(
 )
 
 object ModelCatalog {
+    /** The main model: text, thinking and tools. */
+    val LFM3_1_7B = ModelSpec(
+        id = "lfm3-1.7b",
+        displayName = "LFM3-1.7B",
+        repo = "LiquidAI/LFM3-1.7B-GGUF",
+        quant = "Q4_0",
+        approxSizeBytes = 1_050_000_000L,
+        offered = true,
+    )
+
+    /** Loaded on demand for photo and voice turns. */
     val LFM3_OMNI_2B = ModelSpec(
         id = "lfm3-omni-2b",
         displayName = "LFM3-Omni-2B",
@@ -28,17 +39,7 @@ object ModelCatalog {
         mmprojQuants = listOf("Q8_0", "F16", "BF16"),
     )
 
-    /** The "smart" model, used from M4. */
-    val LFM25_8B_A1B = ModelSpec(
-        id = "lfm2.5-8b-a1b",
-        displayName = "LFM2.5-8B-A1B",
-        repo = "LiquidAI/LFM2.5-8B-A1B-GGUF",
-        quant = "Q4_K_M",
-        approxSizeBytes = 5_000_000_000L,
-        offered = true,
-    )
-
-    val all: List<ModelSpec> = listOf(LFM3_OMNI_2B, LFM25_8B_A1B)
+    val all: List<ModelSpec> = listOf(LFM3_1_7B, LFM3_OMNI_2B)
 
     val offered: List<ModelSpec> get() = all.filter { it.offered }
 

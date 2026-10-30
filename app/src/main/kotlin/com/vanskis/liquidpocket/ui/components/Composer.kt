@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -45,7 +47,8 @@ import com.vanskis.liquidpocket.chat.Attachment
  * The + menu shows when [onPickPhoto] or [onTakePhoto] is given, the mic when [onMic] is; both
  * are disabled unless [attachEnabled] (the mic's stop stays live while it records). The
  * [ContextRing] shows once [contextTotal] is known; its Compact now runs [onCompact], disabled when
- * that is null. [pending] attachments show above the field, each with a remove button.
+ * that is null. [pending] attachments show above the field, each with a remove button. The Think
+ * chip (selected when [think]) shows when [onToggleThink] is given.
  */
 @Composable
 fun Composer(
@@ -68,6 +71,8 @@ fun Composer(
     contextUsed: Int = 0,
     contextTotal: Int = 0,
     onCompact: (() -> Unit)? = null,
+    think: Boolean = false,
+    onToggleThink: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     Column(
@@ -126,6 +131,7 @@ fun Composer(
                         ),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp)) {
+                        onToggleThink?.let { ThinkChip(think, it) }
                         onMic?.let { MicButton(enabled = attachEnabled, onMic = it, recordingMillis = recordingMillis) }
                         if (contextTotal > 0) {
                             ContextRing(
@@ -161,6 +167,18 @@ fun Composer(
             }
         }
     }
+}
+
+/** "Think": whether replies reason before answering. */
+@Composable
+private fun ThinkChip(think: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = think,
+        onClick = onToggle,
+        label = { Text("Think") },
+        leadingIcon = { Icon(AppIcons.Lightbulb, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) },
+        modifier = Modifier.padding(end = 4.dp),
+    )
 }
 
 /** A 40 dp round button filled with [filled] (a gradient or a solid color). */

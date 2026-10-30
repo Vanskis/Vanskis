@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +17,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -36,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.download.NetworkKind
 import com.vanskis.liquidpocket.download.SetupViewModel
@@ -46,10 +50,13 @@ import java.util.Locale
 @Composable
 fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
     val status by vm.status.collectAsStateWithLifecycle()
+    val mediaStatus by vm.mediaStatus.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var askMetered by remember { mutableStateOf(false) }
-    var askDelete by remember { mutableStateOf(false) }
+    // The model a dialog (or the notification permission request) is about; null when none is open.
+    var askMetered by remember { mutableStateOf<ModelSpec?>(null) }
+    var askDelete by remember { mutableStateOf<ModelSpec?>(null) }
+    var requested by remember { mutableStateOf<ModelSpec?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
     BackHandler(enabled = status == DownloadStatus.Ready, onBack = onOpenChat)
@@ -58,23 +65,29 @@ fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
         error?.let { snackbar.showSnackbar(it); vm.dismissError() }
     }
 
-    fun startDownload() {
+    fun startDownload(spec: ModelSpec) {
         when (vm.currentNetwork()) {
-            NetworkKind.METERED -> askMetered = true
+            NetworkKind.METERED -> askMetered = spec
             // With no network the job waits for Wi-Fi.
-            NetworkKind.NONE, NetworkKind.UNMETERED -> vm.download(allowMetered = false)
+            NetworkKind.NONE, NetworkKind.UNMETERED -> vm.download(spec, allowMetered = false)
         }
     }
 
     // Ask for the notification permission first so the progress notification can show; the
     // download starts whatever the answer is.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        startDownload()
+        requested?.let(::startDownload)
+        requested = null
     }
-    val onDownload = {
+    fun onDownload(spec: ModelSpec) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        if (granted) startDownload() else notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (granted) {
+            startDownload(spec)
+        } else {
+            requested = spec
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     Scaffold(
@@ -82,64 +95,102 @@ fun SetupScreen(onOpenChat: () -> Unit, vm: SetupViewModel = viewModel()) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(vm.model.displayName, style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "About ${formatBytes(vm.model.approxSizeBytes)}. Downloaded once from Hugging Face; " +
-                    "after that everything runs on this phone without a network.",
-                style = MaterialTheme.typography.bodyMedium,
+            ModelSection(
+                spec = vm.model,
+                about = "About ${formatBytes(vm.model.approxSizeBytes)}, then " +
+                    "${formatBytes(vm.mediaModel.approxSizeBytes)} for photos and voice. Downloaded once from " +
+                    "Hugging Face; after that everything runs on this phone without a network.",
+                status = status,
+                onDownload = { onDownload(vm.model) },
+                onCancel = { vm.cancel(vm.model) },
+                onDelete = { askDelete = vm.model },
+                onOpenChat = onOpenChat,
             )
-            when (val s = status) {
-                null -> CircularProgressIndicator()
-                else -> StatusSection(s)
-            }
-            val s = status
-            if (s != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    when {
-                        s == DownloadStatus.Ready -> Button(onClick = onOpenChat) { Text("Open chat") }
-                        s.active -> Button(onClick = { vm.cancel() }) { Text("Cancel") }
-                        else -> Button(onClick = onDownload) {
-                            Text(if (s is DownloadStatus.NotDownloaded && s.partialBytes > 0) "Resume download" else "Download")
-                        }
-                    }
-                    val deletable = s == DownloadStatus.Ready || s is DownloadStatus.Failed ||
-                        (s is DownloadStatus.NotDownloaded && s.partialBytes > 0)
-                    if (deletable) OutlinedButton(onClick = { askDelete = true }) { Text("Delete") }
-                }
-            }
+            HorizontalDivider()
+            ModelSection(
+                spec = vm.mediaModel,
+                about = "About ${formatBytes(vm.mediaModel.approxSizeBytes)}. Optional: answers photos and voice " +
+                    "messages. Downloads after ${vm.model.displayName}; you can chat meanwhile.",
+                status = mediaStatus,
+                onDownload = { onDownload(vm.mediaModel) },
+                onCancel = { vm.cancel(vm.mediaModel) },
+                onDelete = { askDelete = vm.mediaModel },
+            )
         }
     }
 
-    if (askMetered) {
+    askMetered?.let { spec ->
+        // The main model brings the media model after it, on the same networks.
+        val bytes = spec.approxSizeBytes + if (spec == vm.model) vm.mediaModel.approxSizeBytes else 0L
         AlertDialog(
-            onDismissRequest = { askMetered = false },
+            onDismissRequest = { askMetered = null },
             title = { Text("Not on Wi-Fi") },
             text = {
                 Text(
-                    "You are on a metered connection. The model is about " +
-                        "${formatBytes(vm.model.approxSizeBytes)}. Wait for Wi-Fi, or download now?",
+                    "You are on a metered connection. The download is about " +
+                        "${formatBytes(bytes)}. Wait for Wi-Fi, or download now?",
                 )
             },
             confirmButton = {
-                TextButton(onClick = { askMetered = false; vm.download(allowMetered = true) }) { Text("Download anyway") }
+                TextButton(onClick = { askMetered = null; vm.download(spec, allowMetered = true) }) { Text("Download anyway") }
             },
             dismissButton = {
-                TextButton(onClick = { askMetered = false; vm.download(allowMetered = false) }) { Text("Wait for Wi-Fi") }
+                TextButton(onClick = { askMetered = null; vm.download(spec, allowMetered = false) }) { Text("Wait for Wi-Fi") }
             },
         )
     }
 
-    if (askDelete) {
+    askDelete?.let { spec ->
         AlertDialog(
-            onDismissRequest = { askDelete = false },
-            title = { Text("Delete the model?") },
-            text = { Text("You will need to download it again to chat.") },
-            confirmButton = { TextButton(onClick = { askDelete = false; vm.delete() }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Keep") } },
+            onDismissRequest = { askDelete = null },
+            title = { Text("Delete ${spec.displayName}?") },
+            text = {
+                Text(
+                    if (spec == vm.model) "You will need to download it again to chat."
+                    else "Photos and voice messages need it; you can download it again here.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { askDelete = null; vm.delete(spec) }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { askDelete = null }) { Text("Keep") } },
         )
+    }
+}
+
+/** One model: its name, [about] text, download status and buttons; Open chat shows when [onOpenChat] is given and it is ready. */
+@Composable
+private fun ModelSection(
+    spec: ModelSpec,
+    about: String,
+    status: DownloadStatus?,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenChat: (() -> Unit)? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(spec.displayName, style = MaterialTheme.typography.headlineSmall)
+        Text(about, style = MaterialTheme.typography.bodyMedium)
+        when (status) {
+            null -> CircularProgressIndicator()
+            else -> StatusSection(status)
+        }
+        if (status != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when {
+                    status == DownloadStatus.Ready -> onOpenChat?.let { Button(onClick = it) { Text("Open chat") } }
+                    status.active -> Button(onClick = onCancel) { Text("Cancel") }
+                    else -> Button(onClick = onDownload) {
+                        Text(if (status is DownloadStatus.NotDownloaded && status.partialBytes > 0) "Resume download" else "Download")
+                    }
+                }
+                val deletable = status == DownloadStatus.Ready || status is DownloadStatus.Failed ||
+                    (status is DownloadStatus.NotDownloaded && status.partialBytes > 0)
+                if (deletable) OutlinedButton(onClick = onDelete) { Text("Delete") }
+            }
+        }
     }
 }
 

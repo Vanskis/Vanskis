@@ -501,6 +501,24 @@ class ChatControllerTest {
         )
     }
 
+    @Test fun `custom instructions reach the system message, read for each reply`() = runTest {
+        var custom = "Answer in French."
+        val c = ChatController(
+            engine, store, this, StandardTestDispatcher(testScheduler), media = media, sink = sink,
+            customInstructions = { custom },
+        )
+        c.ready()
+        exchange(c, "hi", "Bonjour")
+        assertEquals(
+            ChatMessage(Role.SYSTEM, "$SYSTEM_PROMPT\n\n${SystemPrompt.CUSTOM_HEADER}\nAnswer in French."),
+            engine.sent!!.first(),
+        )
+
+        custom = "Be brief."
+        exchange(c, "again", "Ok")
+        assertEquals("$SYSTEM_PROMPT\n\n${SystemPrompt.CUSTOM_HEADER}\nBe brief.", engine.sent!!.first().content)
+    }
+
     @Test fun `a stop before the reply reaches the engine starts no reply`() = runTest {
         val c = controller()
         c.ready()

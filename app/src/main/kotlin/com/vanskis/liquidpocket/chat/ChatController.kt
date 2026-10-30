@@ -16,6 +16,7 @@ import com.vanskis.liquidpocket.engine.ToolCall
 import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
+import com.vanskis.liquidpocket.tools.WebTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -79,6 +80,7 @@ const val MAX_TOOL_ROUNDS = 5
  * Each reply is routed through [models] ([route]): the media model when the newest user turn has
  * photos or voice, the text model otherwise, loaded in place of the current one if need be. Nothing
  * is swapped back after a reply; the next reply routes again. [clock] times the model's thinking.
+ * [customInstructions] (the user's, from Settings) is read for each reply's system prompt.
  */
 class ChatController(
     private val engine: Engine,
@@ -90,6 +92,7 @@ class ChatController(
     private val sink: ReplySink = ReplySink.NONE,
     private val models: ModelTargets = ModelTargets.NONE,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val customInstructions: () -> String = { "" },
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -298,7 +301,13 @@ class ChatController(
                 _state.update { it.copy(conversationId = conversationId) }
                 if (stopRequested) return@after
                 val facts = persist { store.factTexts() }.orEmpty()
-                val system = ChatMessage(Role.SYSTEM, SystemPrompt.build(facts, tools = params.tools.isNotEmpty()))
+                val prompt = SystemPrompt.build(
+                    facts,
+                    tools = params.tools.isNotEmpty(),
+                    custom = customInstructions(),
+                    webSearch = params.tools.any { it.name == WebTools.SEARCH },
+                )
+                val system = ChatMessage(Role.SYSTEM, prompt)
                 val target = route(turns, textOnly)
                 if (target != null && (!load(target) || stopRequested)) return@after
                 var rounds = 0

@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MemoryEstimateTest {
-    private val lfm3 = ModelCatalog.LFM3_OMNI_2B.copy(id = "lfm3-1.7b", displayName = "LFM3-1.7B", approxSizeBytes = 1_100_000_000L)
+    private val lfm3 = ModelCatalog.LFM3_1_7B.copy(approxSizeBytes = 1_100_000_000L)
 
     @Test fun `estimate is the model file plus the KV cache per token`() {
         assertEquals(1_000L + 40L * 1024 * 8192, MemoryEstimate.bytes(1_000L, 40L * 1024, 8192))
@@ -15,7 +15,7 @@ class MemoryEstimateTest {
     @Test fun `each model gets its own per-token figure, unknown ones the cautious one`() {
         assertEquals(MemoryEstimate.LFM3_1_7B_KV_BYTES_PER_TOKEN, MemoryEstimate.kvBytesPerToken(lfm3))
         assertEquals(MemoryEstimate.LFM3_OMNI_2B_KV_BYTES_PER_TOKEN, MemoryEstimate.kvBytesPerToken(ModelCatalog.LFM3_OMNI_2B))
-        assertEquals(MemoryEstimate.LFM3_OMNI_2B_KV_BYTES_PER_TOKEN, MemoryEstimate.kvBytesPerToken(ModelCatalog.LFM25_8B_A1B))
+        assertEquals(MemoryEstimate.LFM3_OMNI_2B_KV_BYTES_PER_TOKEN, MemoryEstimate.kvBytesPerToken(lfm3.copy(displayName = "Other")))
     }
 
     @Test fun `memory grows with the context size`() {

@@ -132,8 +132,11 @@ class ModelInstaller(
         return dest
     }
 
-    fun delete(spec: ModelSpec) {
-        val lines = File(dir, "${spec.id}.resolved").takeIf { it.isFile }?.readLines().orEmpty()
+    fun delete(spec: ModelSpec) = deleteById(spec.id)
+
+    /** [delete] for a model known only by its id, e.g. one no longer in the [ModelCatalog]. */
+    fun deleteById(id: String) {
+        val lines = File(dir, "$id.resolved").takeIf { it.isFile }?.readLines().orEmpty()
         // Lenient: also clears files of a record written before the mmproj was tracked.
         listOfNotNull(parse(lines, 0), parse(lines, 3)).let { files ->
             for (r in files) {
@@ -142,7 +145,7 @@ class ModelInstaller(
                 File(dir, partFile(r).name + ".target").delete()
             }
         }
-        File(dir, "${spec.id}.resolved").delete()
+        File(dir, "$id.resolved").delete()
     }
 
     private fun complete(r: RepoFile): File? = localFile(r).takeIf { it.isFile && it.length() == r.size }

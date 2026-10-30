@@ -33,7 +33,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
-import com.vanskis.liquidpocket.SMART_MODEL
 import com.vanskis.liquidpocket.chat.ChatViewModel
 import com.vanskis.liquidpocket.chat.modelStatus
 import com.vanskis.liquidpocket.engine.EngineState
@@ -56,7 +55,7 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
     val speakReplies by vm.speakReplies.collectAsStateWithLifecycle()
     val recordingMillis by vm.recordingMillis.collectAsStateWithLifecycle()
     val transcript by vm.transcript.collectAsStateWithLifecycle()
-    val smartDownload by vm.smartDownload.collectAsStateWithLifecycle()
+    val think by vm.think.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
 
@@ -155,8 +154,8 @@ fun ChatScreen(onOpenSettings: () -> Unit, vm: ChatViewModel = viewModel()) {
             },
             onOpenSettings = onOpenSettings,
             media = media,
-            smartModelName = SMART_MODEL.displayName,
-            smartDownload = smartDownload,
+            think = think,
+            onToggleThink = vm::toggleThink,
             contextTotal = contextTotal,
             // No compaction in the chat controller yet: the ring's Compact now stays disabled.
             onCompact = null,

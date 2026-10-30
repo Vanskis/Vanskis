@@ -37,6 +37,9 @@ object SystemPrompt {
         "You can use tools on the user's phone. Use a tool for the current date and time rather than guessing. " +
             "Actions that change something (events, reminders, notes, alarms, memories) are done only after the user approves them."
 
+    /** Said when the tools include web search. */
+    const val WEB_SEARCH_LINE = "For current events, or facts you are unsure of, use web_search."
+
     /** Longest custom instruction text the Settings field accepts. */
     const val MAX_CUSTOM_CHARS = 1000
 
@@ -44,10 +47,11 @@ object SystemPrompt {
 
     /**
      * [custom] is the user's free-text instructions from Settings, added after the facts; blank adds
-     * nothing and anything past [MAX_CUSTOM_CHARS] is cut.
+     * nothing and anything past [MAX_CUSTOM_CHARS] is cut. [webSearch] (with [tools]) adds [WEB_SEARCH_LINE].
      */
-    fun build(facts: List<String>, tools: Boolean = false, custom: String = ""): String {
-        val base = if (tools) "$SYSTEM_PROMPT\n$TOOLS_LINE" else SYSTEM_PROMPT
+    fun build(facts: List<String>, tools: Boolean = false, custom: String = "", webSearch: Boolean = false): String {
+        val toolLines = if (webSearch) "$TOOLS_LINE\n$WEB_SEARCH_LINE" else TOOLS_LINE
+        val base = if (tools) "$SYSTEM_PROMPT\n$toolLines" else SYSTEM_PROMPT
         val used = normalize(facts.take(fittingCount(facts)))
         val withFacts =
             if (used.isEmpty()) base else base + "\n\n" + FACTS_HEADER + "\n" + used.joinToString("\n") { "- $it" }

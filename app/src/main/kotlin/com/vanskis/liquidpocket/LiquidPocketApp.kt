@@ -14,12 +14,16 @@ import com.vanskis.liquidpocket.media.AndroidMediaLoader
 import com.vanskis.liquidpocket.media.AttachmentFiles
 import com.vanskis.liquidpocket.settings.SettingsRepository
 import java.io.File
+import kotlin.concurrent.thread
 
-/** The model the app downloads and chats with in M1. */
-val ACTIVE_MODEL = ModelCatalog.LFM3_OMNI_2B
+/** The main model: text, thinking and tools. The chat opens once it is installed. */
+val ACTIVE_MODEL = ModelCatalog.LFM3_1_7B
 
-/** The larger text model swapped in for "Think harder"; downloaded the first time it is wanted. */
-val SMART_MODEL = ModelCatalog.LFM25_8B_A1B
+/** Loaded in place of [ACTIVE_MODEL] for photo and voice turns; downloaded after it. */
+val MEDIA_MODEL = ModelCatalog.LFM3_OMNI_2B
+
+/** The id of LFM2.5-8B-A1B, the "smart" model earlier versions downloaded; its files are deleted at startup. */
+private const val RETIRED_MODEL_ID = "lfm2.5-8b-a1b"
 
 /** Holds the process-wide objects the screens and the download worker share. */
 class LiquidPocketApp : Application() {
@@ -32,4 +36,10 @@ class LiquidPocketApp : Application() {
     val attachments: AttachmentFiles by lazy { AttachmentFiles(this) }
     /** Decoded photos and clips for the engine, cached because every reply resends the whole history. */
     val media: MediaLoader by lazy { CachingMediaLoader(AndroidMediaLoader()) }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Frees the retired model's few GB; once it is gone this is one missing-file check.
+        thread(name = "retire-models") { runCatching { installer.deleteById(RETIRED_MODEL_ID) } }
+    }
 }
