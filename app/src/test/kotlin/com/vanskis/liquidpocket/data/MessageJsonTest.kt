@@ -32,6 +32,15 @@ class MessageJsonTest {
         assertEquals(onlyText, MessageJson.decodeExtras(MessageJson.encodeExtras(onlyText)))
     }
 
+    @Test fun `the summary marker round-trips`() {
+        val summary = MessageExtras(summary = true)
+        assertTrue(!summary.isEmpty)
+        val json = MessageJson.encodeExtras(summary)
+        assertEquals("""{"summary":true}""", json)
+        assertEquals(summary, MessageJson.decodeExtras(json))
+        assertEquals(MessageExtras(), MessageJson.decodeExtras("""{"summary":"yes"}"""))
+    }
+
     @Test fun `no extras is stored as null`() {
         assertNull(MessageJson.encodeExtras(MessageExtras()))
         assertNull(MessageJson.encodeExtras(MessageExtras(thinking = "")))

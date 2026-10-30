@@ -204,6 +204,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
 
     override fun approveTool(confirmationId: Long) = controller.approveTool(confirmationId)
 
+    /** The context ring's Compact now: summarizes the older turns, see [ChatController.compact]. */
+    fun compact() = controller.compact()
+
     override fun declineTool(confirmationId: Long) = controller.declineTool(confirmationId)
 
     /** Reports a problem the screen ran into (a denied permission, no camera app). */

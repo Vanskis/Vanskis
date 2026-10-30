@@ -67,6 +67,14 @@ abstract class ChatDao {
         touch(message.conversationId, message.createdAt)
     }
 
+    /** Replaces the conversation's messages from position [fromIndex] on with [messages], in one transaction. */
+    @Transaction
+    open suspend fun replaceMessages(conversationId: Long, fromIndex: Int, messages: List<MessageEntity>) {
+        truncate(conversationId, fromIndex)
+        messages.forEach { insertMessage(it) }
+        messages.lastOrNull()?.let { touch(conversationId, it.createdAt) }
+    }
+
     /** Deletes the messages explicitly too, so it does not depend on foreign keys being enforced. */
     @Transaction
     open suspend fun deleteConversation(id: Long) {

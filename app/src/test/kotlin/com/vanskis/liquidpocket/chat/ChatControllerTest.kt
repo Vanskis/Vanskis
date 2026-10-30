@@ -54,6 +54,19 @@ class ChatControllerTest {
         /** Reasoning emitted before anything else, then [thinkingMs] of (virtual) time passes. */
         var thinking: List<String> = emptyList()
         var thinkingMs = 0L
+        /** What [countTokens] answers; null counts like an engine that cannot (the interface's default). */
+        var tokenCount: Int? = null
+        val counted = mutableListOf<List<ChatMessage>>()
+        /** Summarization requests ([Compaction.INSTRUCTIONS] first), answered with [summaryText] or [summaryFailure]. */
+        val summaries = mutableListOf<Pair<List<ChatMessage>, GenerationParams>>()
+        var summaryText = "They talked."
+        var summaryFailure: Exception? = null
+
+        override suspend fun countTokens(messages: List<ChatMessage>, params: GenerationParams): Int {
+            val count = tokenCount ?: return super.countTokens(messages, params)
+            counted += messages
+            return count
+        }
 
         override suspend fun load(modelPath: String, config: EngineConfig) {
             loadFailure?.let { throw it }
@@ -66,6 +79,12 @@ class ChatControllerTest {
         }
 
         override fun chat(messages: List<ChatMessage>, params: GenerationParams): Flow<ReplyChunk> = flow {
+            if (messages.first().content == Compaction.INSTRUCTIONS) {
+                summaries += messages to params
+                summaryFailure?.let { throw it }
+                emit(ReplyChunk.Text(summaryText))
+                return@flow
+            }
             sent = messages
             sentParams = params
             chats++
@@ -682,6 +701,167 @@ class ChatControllerTest {
         c.think = true
         exchange(c, "again", "Hello")
         assertTrue(engine.sentParams!!.think)
+    }
+
+    /** Three exchanges, six turns: q1 a1 q2 a2 q3 a3. */
+    private suspend fun TestScope.threeExchanges(c: ChatController) {
+        c.ready()
+        exchange(c, "q1", "a1")
+        exchange(c, "q2", "a2")
+        exchange(c, "q3", "a3")
+    }
+
+    @Test fun `a prompt at 85 percent of the context is compacted before the reply`() = runTest {
+        val c = controller()
+        threeExchanges(c)
+        assertTrue(engine.summaries.isEmpty())
+        engine.tokenCount = 8192 * 85 / 100 + 1
+        engine.summaryText = "  The user asked q1.  "
+        exchange(c, "q4", "a4")
+
+        // The last four turns (a2 q3 a3 q4) are kept from q2, the user's message they start after.
+        // The model summarized q1 a1, without thinking and with a short budget.
+        val (request, summaryParams) = engine.summaries.single()
+        assertTrue(request[1].content.contains("User: q1"))
+        assertTrue(request[1].content.contains("Assistant: a1"))
+        assertFalse(request[1].content.contains("q2"))
+        assertFalse(summaryParams.think)
+        assertEquals(400, summaryParams.maxNewTokens)
+
+        // The engine then sees the summary and only the turns after it.
+        assertEquals(
+            listOf(
+                ChatMessage(Role.SYSTEM, SYSTEM_PROMPT),
+                ChatMessage(Role.SYSTEM, "${Compaction.SUMMARY_HEADER}\nThe user asked q1."),
+                ChatMessage(Role.USER, "q2"),
+                ChatMessage(Role.ASSISTANT, "a2"),
+                ChatMessage(Role.USER, "q3"),
+                ChatMessage(Role.ASSISTANT, "a3"),
+                ChatMessage(Role.USER, "q4"),
+            ),
+            engine.sent,
+        )
+        // Every turn stays in the conversation, the summary in front of the turns kept, and is saved so.
+        val turns = c.state.value.turns
+        assertEquals(listOf("q1", "a1", "The user asked q1.", "q2", "a2", "q3", "a3", "q4", "a4"), turns.map { it.text })
+        assertTrue(turns[2].summary && turns[2].role == Role.SYSTEM)
+        assertEquals(turns, store.saved.getValue(c.state.value.conversationId!!))
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `below 85 percent nothing is compacted`() = runTest {
+        val c = controller()
+        threeExchanges(c)
+        engine.tokenCount = 8192 * 85 / 100 - 1
+        exchange(c, "q4", "a4")
+        assertTrue(engine.summaries.isEmpty())
+        assertEquals(8, engine.sent!!.size)
+        assertFalse(c.state.value.turns.any { it.summary })
+    }
+
+    @Test fun `a summary that fails sends the turn uncompacted without an error`() = runTest {
+        val c = controller()
+        threeExchanges(c)
+        engine.tokenCount = 8000
+        engine.summaryFailure = EngineException("boom")
+        exchange(c, "q4", "a4")
+        assertEquals(1, engine.summaries.size)
+        assertEquals(listOf("q1", "a1", "q2", "a2", "q3", "a3", "q4"), engine.sent!!.drop(1).map { it.content })
+        assertEquals(listOf("q1", "a1", "q2", "a2", "q3", "a3", "q4", "a4"), c.state.value.turns.map { it.text })
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `compact now summarizes below the threshold`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "q1", "a1")
+        exchange(c, "q2", "a2")
+        // Four turns: nothing to compact yet.
+        assertFalse(c.state.value.canCompact)
+        exchange(c, "q3", "a3")
+        assertTrue(c.state.value.canCompact)
+
+        engine.tokenCount = 100
+        c.compact()
+        assertTrue(c.state.value.compacting)
+        assertTrue(c.state.value.busy)
+        advanceUntilIdle()
+        assertFalse(c.state.value.compacting)
+        assertEquals(1, engine.summaries.size)
+        val turns = c.state.value.turns
+        assertEquals(listOf(false, false, true, false, false, false, false), turns.map { it.summary })
+        assertEquals(turns, store.saved.getValue(c.state.value.conversationId!!))
+        assertFalse(c.state.value.canCompact)
+        assertEquals(100, c.state.value.contextUsed)
+
+        exchange(c, "q4", "a4")
+        assertEquals(listOf("q2", "a2", "q3", "a3", "q4"), engine.sent!!.drop(2).map { it.content })
+        assertEquals(1, engine.summaries.size)
+    }
+
+    @Test fun `a second compaction summarizes the first summary with the turns after it`() = runTest {
+        val c = controller()
+        threeExchanges(c)
+        engine.summaryText = "first"
+        c.compact()
+        advanceUntilIdle()
+        exchange(c, "q4", "a4")
+        exchange(c, "q5", "a5")
+        engine.summaryText = "second"
+        c.compact()
+        advanceUntilIdle()
+
+        val request = engine.summaries.last().first[1].content
+        assertTrue(request.contains("first"))
+        assertTrue(request.contains("User: q2"))
+        assertTrue(request.contains("User: q3"))
+        assertFalse(request.contains("q1"))
+        assertFalse(request.contains("q4"))
+        exchange(c, "q6", "a6")
+        assertEquals(
+            listOf("${Compaction.SUMMARY_HEADER}\nsecond", "q4", "a4", "q5", "a5", "q6"),
+            engine.sent!!.drop(1).map { it.content },
+        )
+    }
+
+    @Test fun `context used is counted after each reply and on opening a chat, estimated when the engine cannot count`() = runTest {
+        val c = controller()
+        c.ready()
+        exchange(c, "q1", "a1")
+        // The fake cannot count by default: the newest reply's stats, prompt plus generated.
+        assertEquals(12, c.state.value.contextUsed)
+
+        engine.tokenCount = 321
+        exchange(c, "q2", "a2")
+        assertEquals(321, c.state.value.contextUsed)
+        assertEquals(listOf(Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.USER, Role.ASSISTANT), engine.counted.last().map { it.role })
+
+        val id = c.state.value.conversationId!!
+        c.newChat()
+        advanceUntilIdle()
+        assertEquals(0, c.state.value.contextUsed)
+        engine.tokenCount = 654
+        c.open(id)
+        advanceUntilIdle()
+        assertEquals(654, c.state.value.contextUsed)
+    }
+
+    @Test fun `a reopened chat sends its summary and the turns after it`() = runTest {
+        val id = store.createConversation("old")
+        store.saved.getValue(id) += listOf(
+            Turn(Role.USER, "q1"), Turn(Role.ASSISTANT, "a1"),
+            Turn(Role.SYSTEM, "earlier", summary = true),
+            Turn(Role.USER, "q2"), Turn(Role.ASSISTANT, "a2"),
+        )
+        val c = controller()
+        c.ready()
+        c.open(id)
+        advanceUntilIdle()
+        exchange(c, "q3", "a3")
+        assertEquals(
+            listOf(SYSTEM_PROMPT, "${Compaction.SUMMARY_HEADER}\nearlier", "q2", "a2", "q3"),
+            engine.sent!!.map { it.content },
+        )
     }
 
     @Test fun `speak is passed only when the model can speak`() = runTest {

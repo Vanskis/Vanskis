@@ -29,8 +29,8 @@ fun formatTokenCount(tokens: Int): String {
 
 /**
  * Tokens held in the context after the newest reply that has stats: its prompt plus what it
- * generated. 0 when no reply has stats yet (a new chat). An estimate until the engine reports the
- * live count; the next prompt adds the user's new message on top.
+ * generated. 0 when no reply has stats yet (a new chat). The estimate [com.vanskis.liquidpocket.chat.ChatState.contextUsed]
+ * falls back to when the engine cannot count tokens; the next prompt adds the user's new message on top.
  */
 fun contextTokensUsed(turns: List<Turn>): Int {
     val stats = turns.lastOrNull { it.stats != null }?.stats ?: return 0

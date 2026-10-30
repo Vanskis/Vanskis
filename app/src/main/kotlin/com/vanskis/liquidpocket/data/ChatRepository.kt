@@ -39,6 +39,11 @@ class ChatRepository(
 
     override suspend fun truncate(conversationId: Long, fromIndex: Int) = dao.truncate(conversationId, fromIndex)
 
+    override suspend fun replaceFrom(conversationId: Long, fromIndex: Int, turns: List<Turn>) {
+        val now = clock()
+        dao.replaceMessages(conversationId, fromIndex, turns.map { it.toEntity(conversationId, now) })
+    }
+
     override suspend fun deleteConversation(conversationId: Long) = dao.deleteConversation(conversationId)
 
     suspend fun rename(conversationId: Long, title: String) {
@@ -92,6 +97,7 @@ class ChatRepository(
             toolName = toolName,
             thinking = extras.thinking,
             thinkingMillis = extras.thinkingMillis,
+            summary = extras.summary,
         )
     }
 
@@ -107,6 +113,6 @@ class ChatRepository(
         attachmentsJson = MessageJson.encodeAttachments(attachments),
         toolCallsJson = MessageJson.encodeToolCalls(toolCalls),
         toolName = toolName,
-        extrasJson = MessageJson.encodeExtras(MessageExtras(thinking, thinkingMillis)),
+        extrasJson = MessageJson.encodeExtras(MessageExtras(thinking, thinkingMillis, summary)),
     )
 }

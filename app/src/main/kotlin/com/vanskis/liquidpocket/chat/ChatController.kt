@@ -17,6 +17,7 @@ import com.vanskis.liquidpocket.tools.Tool
 import com.vanskis.liquidpocket.tools.ToolResult
 import com.vanskis.liquidpocket.tools.ToolResults
 import com.vanskis.liquidpocket.tools.WebTools
+import com.vanskis.liquidpocket.ui.components.contextTokensUsed
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -46,11 +47,21 @@ data class ChatState(
     val error: String? = null,
     /** A tool call waiting for the user's approval; the reply is paused (still [generating]) meanwhile. */
     val confirmation: ToolConfirmation? = null,
+    /**
+     * Tokens the conversation takes in the context, as the engine counts the history it is sent
+     * (or estimated from the newest reply's stats when the engine cannot count). 0 for a new chat.
+     */
+    val contextUsed: Int = 0,
+    /** Compact now is summarizing older turns. */
+    val compacting: Boolean = false,
 ) {
     val generating: Boolean get() = streaming != null
 
-    /** Loading or generating: nothing new can start. */
-    val busy: Boolean get() = loading || generating
+    /** Loading, generating or compacting: nothing new can start. */
+    val busy: Boolean get() = loading || generating || compacting
+
+    /** Compact now can run: nothing is busy and there are more than [Compaction.KEEP_TURNS] turns since the newest summary. */
+    val canCompact: Boolean get() = !busy && Compaction.canCompact(turns)
 
     /** Index of the newest turn the user wrote, -1 if there is none. Regenerate and edit act on it. */
     val lastUserIndex: Int get() = turns.indexOfLast { it.role == Role.USER && !it.fromTool }
@@ -81,6 +92,10 @@ const val MAX_TOOL_ROUNDS = 5
  * photos or voice, the text model otherwise, loaded in place of the current one if need be. Nothing
  * is swapped back after a reply; the next reply routes again. [clock] times the model's thinking.
  * [customInstructions] (the user's, from Settings) is read for each reply's system prompt.
+ *
+ * A reply to a new user turn first compacts the conversation ([Compaction]) when its prompt fills
+ * [Compaction.THRESHOLD_PERCENT] of the context; [compact] does it on request. A summary that fails
+ * leaves the conversation as it was. [ChatState.contextUsed] is counted after each reply and on [open].
  */
 class ChatController(
     private val engine: Engine,
@@ -116,6 +131,9 @@ class ChatController(
 
     /** Lets a model that thinks reason before answering ([GenerationParams.think]); [thinkHarder] always does. */
     var think: Boolean = true
+
+    /** The newest reply's params, which [open] and [compact] count the context with (tools take room in it). */
+    private var lastParams = GenerationParams()
 
     /**
      * Loads [modelPath] (with its projector [mmprojPath]) and [contextSize] unless the engine already
@@ -219,7 +237,32 @@ class ChatController(
 
     /** Ends the reply early; the text so far is kept as the assistant turn. A tool call awaiting approval is declined. */
     fun stop() {
-        if (_state.value.generating) requestStop()
+        if (_state.value.generating || _state.value.compacting) requestStop()
+    }
+
+    /**
+     * Summarizes the turns before the last [Compaction.KEEP_TURNS] now, whatever the context use.
+     * Ignored while busy or with nothing to summarize ([ChatState.canCompact]).
+     */
+    fun compact() {
+        if (!_state.value.canCompact) return
+        stopRequested = false
+        _state.update { it.copy(compacting = true, error = null) }
+        after { previous ->
+            previous?.join()
+            try {
+                // The loaded model summarizes; the text model is loaded only when none is.
+                if (engine.state.value !is EngineState.Ready) {
+                    val target = route(_state.value.turns, textOnly = true)
+                    if (target != null && !load(target)) return@after
+                }
+                if (stopRequested) return@after
+                compactTurns(_state.value.conversationId)
+                refreshContextUsed(systemMessage(lastParams), lastParams)
+            } finally {
+                _state.update { it.copy(compacting = false) }
+            }
+        }
     }
 
     /** Runs the tool call waiting in [ChatState.confirmation], if [confirmationId] is that card's. */
@@ -235,21 +278,22 @@ class ChatController(
     /** Starts a new, unsaved conversation. */
     fun newChat() = after { previous ->
         stopAndWait(previous)
-        _state.update { it.copy(conversationId = null, turns = emptyList(), error = null) }
+        _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0) }
     }
 
-    /** Opens a saved conversation with all its turns. */
+    /** Opens a saved conversation with all its turns, and counts the context they take. */
     fun open(conversationId: Long) = after { previous ->
         stopAndWait(previous)
         val turns = persist { store.turns(conversationId) } ?: return@after
-        _state.update { it.copy(conversationId = conversationId, turns = turns, error = null) }
+        _state.update { it.copy(conversationId = conversationId, turns = turns, error = null, contextUsed = 0) }
+        refreshContextUsed(systemMessage(lastParams), lastParams)
     }
 
     /** Deletes a saved conversation; when it is the open one, a new chat takes its place. */
     fun deleteConversation(conversationId: Long) = after { previous ->
         if (_state.value.conversationId == conversationId) {
             stopAndWait(previous)
-            _state.update { it.copy(conversationId = null, turns = emptyList(), error = null) }
+            _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0) }
         } else {
             previous?.join()
         }
@@ -278,7 +322,8 @@ class ChatController(
      * the result, running the tools it calls. The store is brought to the same turns before the engine starts.
      *
      * The model the turns route to ([route], as if nothing was attached when [textOnly]) is loaded
-     * first if it is not already; when none is installed the loaded model answers.
+     * first if it is not already; when none is installed the loaded model answers. With [newUser],
+     * the conversation is compacted first if it fills the context ([compactIfFull]).
      */
     private fun reply(keep: Int, newUser: Turn?, params: GenerationParams, textOnly: Boolean = false) {
         val before = _state.value
@@ -286,6 +331,7 @@ class ChatController(
         val turns = if (newUser == null) kept else kept + newUser
         val dropped = before.turns.size > keep
         stopRequested = false
+        lastParams = params
         _state.update { it.copy(turns = turns, streaming = "", streamingThinking = null, error = null) }
         after { previous ->
             previous?.join()
@@ -300,16 +346,13 @@ class ChatController(
                 }
                 _state.update { it.copy(conversationId = conversationId) }
                 if (stopRequested) return@after
-                val facts = persist { store.factTexts() }.orEmpty()
-                val prompt = SystemPrompt.build(
-                    facts,
-                    tools = params.tools.isNotEmpty(),
-                    custom = customInstructions(),
-                    webSearch = params.tools.any { it.name == WebTools.SEARCH },
-                )
-                val system = ChatMessage(Role.SYSTEM, prompt)
+                val system = systemMessage(params)
                 val target = route(turns, textOnly)
                 if (target != null && (!load(target) || stopRequested)) return@after
+                if (newUser != null) {
+                    compactIfFull(system, params, conversationId)
+                    if (stopRequested) return@after
+                }
                 var rounds = 0
                 while (true) {
                     val calls = streamReply(system, params, conversationId, mayCallTools = rounds < MAX_TOOL_ROUNDS)
@@ -318,11 +361,98 @@ class ChatController(
                     runTools(calls, conversationId)
                     if (stopRequested) break
                 }
+                refreshContextUsed(system, params)
             } finally {
                 _state.update { it.copy(streaming = null, streamingThinking = null, confirmation = null) }
             }
         }
     }
+
+    /** The system prompt for a reply with [params]: the remembered facts, tool guidance and custom instructions. */
+    private suspend fun systemMessage(params: GenerationParams): ChatMessage {
+        val facts = persist { store.factTexts() }.orEmpty()
+        val prompt = SystemPrompt.build(
+            facts,
+            tools = params.tools.isNotEmpty(),
+            custom = customInstructions(),
+            webSearch = params.tools.any { it.name == WebTools.SEARCH },
+        )
+        return ChatMessage(Role.SYSTEM, prompt)
+    }
+
+    /** What the engine is sent for the turns so far: [system], then the newest summary and the turns after it. */
+    private suspend fun history(system: ChatMessage): List<ChatMessage> {
+        val caps = engine.capabilities.value
+        val turns = _state.value.turns
+        return withContext(work) {
+            // Media is decoded once per turn, not again for the count after the reply.
+            val previous = converted.takeIf { caps == convertedFor } ?: java.util.IdentityHashMap()
+            val next = java.util.IdentityHashMap<Turn, ChatMessage>()
+            val history = Compaction.history(system, turns) { turn ->
+                (previous[turn] ?: turn.toMessage(caps)).also { next[turn] = it }
+            }
+            converted = next
+            convertedFor = caps
+            history
+        }
+    }
+
+    /** The messages [history] last made of each turn, with the capabilities they were made for. */
+    private var converted = java.util.IdentityHashMap<Turn, ChatMessage>()
+    private var convertedFor: Capabilities? = null
+
+    /** Tokens the history takes as the engine counts it; the estimate from the newest reply's stats if it cannot. */
+    private suspend fun contextUsed(system: ChatMessage, params: GenerationParams): Int =
+        try {
+            val history = history(system)
+            withContext(work) { engine.countTokens(history, params.copy(speak = false)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            contextTokensUsed(_state.value.turns)
+        }
+
+    private suspend fun refreshContextUsed(system: ChatMessage, params: GenerationParams) {
+        val used = contextUsed(system, params)
+        _state.update { it.copy(contextUsed = used) }
+    }
+
+    /** Compacts the conversation when the prompt for the next reply fills [Compaction.THRESHOLD_PERCENT] of the context. */
+    private suspend fun compactIfFull(system: ChatMessage, params: GenerationParams, conversationId: Long?) {
+        val total = (engine.state.value as? EngineState.Ready)?.contextSize ?: return
+        if (!Compaction.canCompact(_state.value.turns)) return
+        if (Compaction.shouldCompact(contextUsed(system, params), total)) compactTurns(conversationId)
+    }
+
+    /**
+     * Has the model summarize the turns [Compaction.plan] picks, then puts the summary in front of
+     * the turns kept and saves that. A summary that fails, comes back empty or is stopped changes nothing.
+     */
+    private suspend fun compactTurns(conversationId: Long?) {
+        val turns = _state.value.turns
+        val plan = Compaction.plan(turns) ?: return
+        val summary = summarize(plan) ?: return
+        if (stopRequested) return
+        val compacted = Compaction.compacted(turns, plan, summary)
+        _state.update { it.copy(turns = compacted) }
+        if (conversationId != null) {
+            withContext(NonCancellable) { persist { store.replaceFrom(conversationId, plan.cut, compacted.drop(plan.cut)) } }
+        }
+    }
+
+    /** The model's summary for [plan], or null when it failed or came back empty. Nothing of it is streamed. */
+    private suspend fun summarize(plan: Compaction.Plan): String? =
+        try {
+            val text = StringBuilder()
+            engine.chat(Compaction.request(plan), Compaction.PARAMS)
+                .flowOn(work)
+                .collect { if (it is ReplyChunk.Text) text.append(it.text) }
+            text.toString().trim().ifEmpty { null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 
     /**
      * Streams one reply to [system] and the turns so far, and commits it with its thinking. Returns
@@ -344,8 +474,7 @@ class ChatController(
         var thinkingUntil: Long? = null
         try {
             val caps = engine.capabilities.value
-            val turns = _state.value.turns
-            val history = withContext(work) { listOf(system) + turns.map { it.toMessage(caps) } }
+            val history = history(system)
             engine.chat(history, params.copy(speak = params.speak && caps.audioOut))
                 // Caught before flowOn so text already buffered still arrives after a failure.
                 .catch { e ->
