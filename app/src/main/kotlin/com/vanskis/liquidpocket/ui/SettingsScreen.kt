@@ -102,6 +102,14 @@ fun SettingsScreen(
                 Switch(checked = settings.dynamicColor, onCheckedChange = vm::setDynamicColor)
             }
 
+            Row(modifier = Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Web search", style = MaterialTheme.typography.titleMedium)
+                    Text("Queries leave the phone (DuckDuckGo, Wikipedia, Jina)", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = settings.webSearch, onCheckedChange = vm::setWebSearch)
+            }
+
             Text("Voice", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
