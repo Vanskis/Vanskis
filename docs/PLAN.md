@@ -133,6 +133,17 @@ its own tests, in this order. Items 1, 2 and 4 come first; measure before buildi
 0. **Measure first.** On the phone: memory with LFM3-1.7B and Omni both loaded; time to restore a
    saved 8K and 32K chat state against re-reading it; time to first token today. Record the numbers
    here before starting 1 and 2.
+   **Measured (2026-10-31, NPU build, context 8192):** chat model load 1051 ms. Time to first
+   token: 105 ms for a 23-token prompt, 2248 ms for 6018 tokens (2723 tok/s prompt reading).
+   Memory (PSS / native heap / available RAM): chat model alone 444 / 364 / 2611 MB; with Omni
+   too 2237 / 2173 / 1626 MB, so Omni adds about 1.8 GB; freeing it works. Saved state of the
+   6018-token chat: 73.7 MB file (about 12 KB per token), save 40 ms, restore 29 ms against
+   2381 ms to re-read it (82x faster). 32K not measured (context was 8192); by the same rate a
+   32K state would be about 400 MB.
+   **Conclusion:** item 2 is a clear win and goes first. Its size cap matters: a few long chats
+   would reach gigabytes. Item 1 costs 1.8 GB and leaves about 1.6 GB free, so Omni stays loaded
+   only while the app is in the foreground and is freed on a low-memory signal. Once item 2 is
+   in, a swap back to the chat model costs about 1 s of loading instead of re-reading the chat.
 1. **Both models loaded.** Keep LFM3-1.7B and Omni resident so photo and voice turns need no swap.
    Falls back to swapping when memory is short (low-memory signal, or a failed second load).
 2. **Saved chat state.** Save each chat's KV cache to a file (`llama_state_seq_save_file`) after a
