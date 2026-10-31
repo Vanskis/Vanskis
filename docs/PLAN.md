@@ -145,6 +145,9 @@ its own tests, in this order. Items 1, 2 and 4 come first; measure before buildi
    offered tools' schemas, so a malformed call cannot be produced. Thinking, answer and tool calls
    come from llama.cpp's chat parser as separate parts instead of marker scanning, where the
    template supports it; marker scanning stays as the fallback.
+   **Done (6f9f523):** this was already true: llama.cpp enforces the tool grammar by
+   rejection sampling, and tool calls come from the template's parser. Kept only a guard so a
+   template without a parser falls back to the reply filter instead of showing raw markup.
 5. **Engine in its own process.** A native crash restarts the engine only; the chat screen stays.
 6. **Lookup decoding.** n-gram (prompt lookup) speculative decoding, which needs no draft model; on
    only where it measures faster.
