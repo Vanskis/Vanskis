@@ -53,7 +53,8 @@ data class StateMeta(
  *
  * Rules:
  * - Stores state (.bin), text sidecar (.bin.text), and metadata (.meta) by conversation id.
- * - Each state is tied to the model file and context settings ([ModelStateKey]). Mismatch deletes the files.
+ * - Each state is tied to the model file and context settings ([ModelStateKey]). A changed model file or
+ *   context deletes the files; another model being loaded leaves them for when this one returns.
  * - Deletes state on conversation delete, truncate/edit before end, or model change.
  * - Total size cap [maxBytes] (default 512 MB): evicts least recently used state files past cap.
  * - Never saves a single state larger than [maxBytes].
@@ -148,7 +149,7 @@ class SavedChatState(
 
     /**
      * Restores sequence state for [conversationId] if its metadata matches [key].
-     * Returns true if restored, false if missing, mismatched (deleted), or load failed.
+     * Returns true if restored; false if missing, saved for another model (kept), mismatched (deleted), or load failed.
      */
     suspend fun load(conversationId: Long, key: ModelStateKey): Boolean {
         try {
@@ -160,6 +161,8 @@ class SavedChatState(
             }
 
             val savedMeta = readMeta(meta)
+            // Another model is loaded (Omni for a photo, say): keep the state for when this chat's model returns.
+            if (savedMeta != null && savedMeta.modelPath != key.modelPath) return false
             if (savedMeta == null || !savedMeta.matches(key)) {
                 // Key mismatch: delete the file and fall back to normal re-prefill
                 delete(conversationId)

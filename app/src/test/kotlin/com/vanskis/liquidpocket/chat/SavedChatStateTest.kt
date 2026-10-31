@@ -51,16 +51,15 @@ class SavedChatStateTest {
     fun keyMismatchDeletesFilesAndFallsBack() = runBlocking {
         val store = createStore()
 
-        // 1. Mismatch in modelPath
+        // 1. Another model loaded: not restored, but kept for when this chat's model returns
         simulatedTime += 10
         assertTrue(store.save(1L, modelA))
         assertTrue(store.hasState(1L))
-        val wrongPath = modelA.copy(modelPath = "/models/other-model.gguf")
-        assertFalse("Mismatched modelPath should fail to load", store.load(1L, wrongPath))
-        assertFalse("State files should be deleted after mismatch", store.hasState(1L))
-        assertFalse(store.binFile(1L).exists())
-        assertFalse(store.textFile(1L).exists())
-        assertFalse(store.metaFile(1L).exists())
+        val otherModel = modelA.copy(modelPath = "/models/other-model.gguf")
+        assertFalse("Another model should not restore the state", store.load(1L, otherModel))
+        assertTrue("State saved for another model should be kept", store.hasState(1L))
+        assertTrue(store.textFile(1L).exists())
+        assertTrue("The chat's own model restores it", store.load(1L, modelA))
 
         // 2. Mismatch in modelSize
         simulatedTime += 10
