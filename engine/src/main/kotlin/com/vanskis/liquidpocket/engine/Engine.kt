@@ -80,6 +80,18 @@ interface Engine {
         readMemory: () -> MemorySnapshot,
     ): MeasureResult =
         throw UnsupportedOperationException("measure is not implemented by ${javaClass.simpleName}")
+
+    /**
+     * Saves sequence 0 state (KV cache and cached tokens) to [file].
+     * Returns bytes written, or 0 if state could not be saved (e.g. multimodal units or empty).
+     */
+    suspend fun saveState(file: java.io.File): Long = 0L
+
+    /**
+     * Loads sequence 0 state from [file].
+     * Returns tokens restored, or 0 on failure.
+     */
+    suspend fun loadState(file: java.io.File): Int = 0
 }
 
 /** Where the model's layers run. */

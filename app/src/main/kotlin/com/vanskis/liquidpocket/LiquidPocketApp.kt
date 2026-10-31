@@ -4,6 +4,7 @@ import android.app.Application
 import com.vanskis.liquidpocket.access.SharedDocuments
 import com.vanskis.liquidpocket.chat.CachingMediaLoader
 import com.vanskis.liquidpocket.chat.MediaLoader
+import com.vanskis.liquidpocket.chat.SavedChatState
 import com.vanskis.liquidpocket.core.ModelCatalog
 import com.vanskis.liquidpocket.core.ModelInstaller
 import com.vanskis.liquidpocket.data.AppDatabase
@@ -43,7 +44,8 @@ class LiquidPocketApp : Application() {
     val engine: Engine by lazy { Engines.llama(this) }
     val npuPick: NpuAutoPick by lazy { NpuAutoPick(this, engine, settings) }
     val database: AppDatabase by lazy { AppDatabase.create(this) }
-    val chats: ChatRepository by lazy { ChatRepository(database.chatDao()) }
+    val savedState: SavedChatState by lazy { SavedChatState(File(cacheDir, "kv"), engine) }
+    val chats: ChatRepository by lazy { ChatRepository(database.chatDao(), savedState = savedState) }
     val attachments: AttachmentFiles by lazy { AttachmentFiles(this) }
     /** Attached documents' extracted text, by the id a DOCUMENT attachment keeps in its path. */
     val documents: DocumentStore by lazy { DocumentStore(File(filesDir, "docs")) }

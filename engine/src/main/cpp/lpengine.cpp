@@ -136,6 +136,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <set>
 #include <stdexcept>
@@ -1421,18 +1422,48 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeFreeExtraModel(JNIEnv * /
 }
 
 // Saves sequence 0 state (KV cache + cached tokens) to jpath.
-// Returns the number of bytes written, or throws on failure.
+// Returns the number of bytes written, 0 if not saved (multimodal units or empty cache), or throws on failure.
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeSaveState(JNIEnv * env, jobject /*thiz*/, jstring jpath) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return 0; }
+
+    // Problem 1: Never save while g_cached holds any unit that is not a single token.
+    if (!g_cached_text_valid || g_cached.empty()) {
+        return 0;
+    }
+    for (const auto & u : g_cached) {
+        if (u.token == LLAMA_TOKEN_NULL || u.chunk != nullptr || u.n_pos != 1 || u.n_tokens != 1 || !u.media_id.empty()) {
+            return 0;
+        }
+    }
+
     const std::string path = jstring_to_std(env, jpath);
     std::vector<llama_token> tokens;
     tokens.reserve(g_cached.size());
     for (const auto & u : g_cached) {
-        if (u.token != LLAMA_TOKEN_NULL) tokens.push_back(u.token);
+        tokens.push_back(u.token);
     }
+
+    // Problem 2: Save cached text sidecar next to the sequence state for fast-path prefix matching.
+    const std::string text_path = path + ".text";
+    {
+        std::ofstream out(text_path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            throw_java(env, "Failed to write cached text to " + text_path);
+            return 0;
+        }
+        out.write(g_cached_text.data(), g_cached_text.size());
+        if (!out.good()) {
+            std::remove(text_path.c_str());
+            throw_java(env, "Failed to write cached text to " + text_path);
+            return 0;
+        }
+    }
+
     const size_t bytes = llama_state_seq_save_file(g_ctx, path.c_str(), 0, tokens.data(), tokens.size());
     if (bytes == 0) {
+        std::remove(text_path.c_str());
+        std::remove(path.c_str());
         throw_java(env, "Failed to save sequence state to " + path);
         return 0;
     }
@@ -1466,6 +1497,20 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadState(JNIEnv * env, j
         g_n_past += 1;
         g_n_tokens += 1;
     }
+
+    // Problem 2: Restore cached text for prefix match, and ensure g_speak_in_memory is false.
+    const std::string text_path = path + ".text";
+    std::ifstream in(text_path, std::ios::binary);
+    if (in.is_open()) {
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        g_cached_text = std::move(text);
+        g_cached_text_valid = true;
+    } else {
+        g_cached_text.clear();
+        g_cached_text_valid = false;
+    }
+    g_speak_in_memory = false;
+
     return static_cast<jint>(n_tokens);
 }
 
