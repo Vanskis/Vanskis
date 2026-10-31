@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.vanskis.liquidpocket.core.ModelInstaller
 import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.core.ModelSpecData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -33,7 +34,13 @@ class ModelDownloads(private val context: Context, private val installer: ModelI
     /** Over Wi-Fi only unless [allowMetered]; an existing pending download is kept as is. */
     fun download(spec: ModelSpec, allowMetered: Boolean) {
         val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
-            .setInputData(workDataOf(ModelDownloadWorker.KEY_MODEL_ID to spec.id, ModelDownloadWorker.KEY_REPO to spec.repo))
+            .setInputData(
+                workDataOf(
+                    ModelDownloadWorker.KEY_MODEL_ID to spec.id,
+                    ModelDownloadWorker.KEY_REPO to spec.repo,
+                    *ModelSpecData.encode(spec).toList().toTypedArray(),
+                ),
+            )
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(if (allowMetered) NetworkType.CONNECTED else NetworkType.UNMETERED)

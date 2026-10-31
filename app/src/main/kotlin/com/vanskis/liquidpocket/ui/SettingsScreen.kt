@@ -1,6 +1,8 @@
 package com.vanskis.liquidpocket.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -53,6 +55,9 @@ import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.ui.components.HereticPicker
+import com.vanskis.liquidpocket.ui.components.CustomModelActions
+import com.vanskis.liquidpocket.ui.components.CustomModelsSection
+import com.vanskis.liquidpocket.ui.components.downloadLine
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
 import com.vanskis.liquidpocket.settings.AppTheme
@@ -74,6 +79,10 @@ fun SettingsScreen(
     val benchmarking by vm.benchmarking.collectAsStateWithLifecycle()
     val benchmark by vm.benchmark.collectAsStateWithLifecycle()
     val omniInstalled by vm.omniInstalled.collectAsStateWithLifecycle()
+    val lookup by vm.lookup.collectAsStateWithLifecycle()
+    val importing by vm.importing.collectAsStateWithLifecycle()
+    val saved by vm.saved.collectAsStateWithLifecycle()
+    val pickGguf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importModel) }
     // Sliders move locally and update the draft when released.
     var contextStop by remember(settings.contextSize) { mutableFloatStateOf(ContextSize.nearestOption(settings.contextSize).toFloat()) }
     val contextSize = ContextSize.OPTIONS[contextStop.roundToInt()]
@@ -333,6 +342,24 @@ fun SettingsScreen(
             HereticChoice(vm, ACTIVE_MODEL, settings.hereticText, settings.hereticTextRepo, media = false)
             HereticChoice(vm, MEDIA_MODEL, settings.hereticMedia, settings.hereticMediaRepo, media = true)
 
+            // Stored at once, not with Save.
+            CustomModelsSection(
+                saved.customModels,
+                lookup,
+                importing,
+                CustomModelActions(
+                    status = vm::downloadStatus,
+                    lookUp = vm::lookUp,
+                    dismissLookup = vm::dismissLookup,
+                    add = vm::addCustomModel,
+                    import = { pickGguf.launch(arrayOf("application/octet-stream", "*/*")) },
+                    change = vm::changeCustomModel,
+                    remove = vm::removeCustomModel,
+                    download = vm::download,
+                    cancel = vm::cancelDownload,
+                ),
+            )
+
             OutlinedButton(onClick = onManageModel, modifier = Modifier.padding(top = 24.dp)) { Text("Manage model") }
         }
     }
@@ -362,19 +389,6 @@ private fun HereticChoice(vm: SettingsViewModel, base: ModelSpec, use: Boolean, 
         suggested = Heretic.suggested(base),
     )
 }
-
-private fun downloadLine(status: DownloadStatus): String = when (status) {
-    is DownloadStatus.NotDownloaded ->
-        if (status.partialBytes > 0) "Paused at ${status.partialBytes / 1_000_000} MB." else "Not downloaded."
-    DownloadStatus.Waiting -> "Waiting for Wi-Fi."
-    DownloadStatus.Resolving -> "Looking up the repo…"
-    is DownloadStatus.Downloading -> "Downloading ${percent(status.bytes, status.total)}%"
-    is DownloadStatus.Verifying -> "Checking the file…"
-    DownloadStatus.Ready -> "Downloaded; used from the next reply."
-    is DownloadStatus.Failed -> status.message
-}
-
-private fun percent(bytes: Long, total: Long) = if (total > 0) (bytes * 100 / total).toInt() else 0
 
 @Composable
 private fun VoiceEngineOption(label: String, detail: String, selected: Boolean, onSelect: () -> Unit, enabled: Boolean = true) {

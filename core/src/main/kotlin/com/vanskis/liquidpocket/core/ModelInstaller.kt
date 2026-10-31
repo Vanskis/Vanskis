@@ -41,6 +41,15 @@ class ModelInstaller(
         return RepoFile(lines[at], lines[at + 1].toLongOrNull() ?: return null, lines[at + 2].ifBlank { null })
     }
 
+    /** Where a model imported from the phone is copied to, as [name]; [adopt] then records it. */
+    fun importFile(name: String): File = File(dir.apply { mkdirs() }, name.substringAfterLast('/'))
+
+    /** Records [file] (from [importFile], fully copied) as [spec]'s installed model. */
+    fun adopt(spec: ModelSpec, file: File) {
+        require(file.parentFile == dir && file.isFile) { "Not an imported model file: $file" }
+        File(dir, "${spec.id}.resolved").writeText("${file.name}\n${file.length()}\n\n")
+    }
+
     fun installedFile(spec: ModelSpec): File? {
         val (model, proj) = resolvedPair(spec) ?: return null
         if (proj != null && complete(proj) == null) return null

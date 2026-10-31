@@ -18,6 +18,7 @@ import com.vanskis.liquidpocket.chat.Skills
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.core.CustomModel
 import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.ui.components.Indicators
@@ -54,6 +55,8 @@ data class AppSettings(
     val liveVoiceModel: LiveVoiceModel? = null,
     /** The user's own skills, listed after the built-in ones when "/" is typed. */
     val userSkills: List<Skill> = emptyList(),
+    /** Models the user added from Hugging Face or the phone ([CustomModel]). */
+    val customModels: List<CustomModel> = emptyList(),
     /** Use a Heretic build of LFM3-1.7B from [hereticTextRepo] instead of the standard one. */
     val hereticText: Boolean = false,
     val hereticTextRepo: String = "",
@@ -100,6 +103,7 @@ class SettingsRepository(context: Context) {
                 useNpu = prefs[USE_NPU] ?: false,
                 liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
                 userSkills = Skills.decode(prefs[USER_SKILLS]),
+                customModels = CustomModel.decode(prefs[CUSTOM_MODELS]),
                 hereticText = prefs[HERETIC_TEXT] ?: false,
                 hereticTextRepo = prefs[HERETIC_TEXT_REPO] ?: "",
                 hereticMedia = prefs[HERETIC_MEDIA] ?: false,
@@ -136,6 +140,7 @@ class SettingsRepository(context: Context) {
             it[USE_NPU] = value.useNpu
             value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
             it[USER_SKILLS] = Skills.encode(value.userSkills)
+            it[CUSTOM_MODELS] = CustomModel.encode(value.customModels)
             it[HERETIC_TEXT] = value.hereticText
             it[HERETIC_TEXT_REPO] = value.hereticTextRepo.trim()
             it[HERETIC_MEDIA] = value.hereticMedia
@@ -169,6 +174,19 @@ class SettingsRepository(context: Context) {
             it[THINK] = on
             it[THINK_BUDGET] = ThinkBudget.clamp(budget)
         }
+    }
+
+    /** Replaces the custom model with [model]'s id, or adds it; stored at once, not with [save]. */
+    suspend fun putCustomModel(model: CustomModel) {
+        store.edit { prefs ->
+            val list = CustomModel.decode(prefs[CUSTOM_MODELS])
+            val next = if (list.any { it.id == model.id }) list.map { if (it.id == model.id) model else it } else list + model
+            prefs[CUSTOM_MODELS] = CustomModel.encode(next)
+        }
+    }
+
+    suspend fun removeCustomModel(id: String) {
+        store.edit { prefs -> prefs[CUSTOM_MODELS] = CustomModel.encode(CustomModel.decode(prefs[CUSTOM_MODELS]).filter { it.id != id }) }
     }
 
     suspend fun setChatModel(id: String) {
@@ -211,6 +229,7 @@ class SettingsRepository(context: Context) {
         val SHOW_ELAPSED = booleanPreferencesKey("show_elapsed")
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val USER_SKILLS = stringPreferencesKey("user_skills")
+        val CUSTOM_MODELS = stringPreferencesKey("custom_models")
         val HERETIC_TEXT = booleanPreferencesKey("heretic_text")
         val HERETIC_TEXT_REPO = stringPreferencesKey("heretic_text_repo")
         val HERETIC_MEDIA = booleanPreferencesKey("heretic_media")

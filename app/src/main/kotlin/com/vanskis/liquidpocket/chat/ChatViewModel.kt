@@ -16,6 +16,7 @@ import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.access.LaunchRequest
 import com.vanskis.liquidpocket.access.SharedDocument
 import com.vanskis.liquidpocket.access.SharedInbox
+import com.vanskis.liquidpocket.core.CustomModel
 import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.docs.DocumentText
@@ -109,7 +110,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val models = object : ModelTargets {
         override suspend fun text() =
             picked(settings.value)?.let { installed(it) } ?: installed(settings.value.textModel) ?: installed(ACTIVE_MODEL)
-        override suspend fun media() = installed(settings.value.mediaModel) ?: installed(MEDIA_MODEL)
+        override suspend fun media() = installed(settings.value.mediaModel) ?: installed(MEDIA_MODEL) ?: pickedVision()
     }
 
     private val controller = ChatController(
@@ -145,11 +146,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
         viewModelScope.launch { settings.collect { refreshModels() } }
     }
 
-    /** Every model the chat can answer with: each catalogued one and, once its repo is set, its Heretic build. */
+    /**
+     * Every model the chat can answer with: each catalogued one and, once its repo is set, its Heretic
+     * build; then each custom model and its Heretic build.
+     */
     private fun candidates(s: AppSettings): List<ModelSpec> =
         listOf(ACTIVE_MODEL to s.hereticTextRepo, MEDIA_MODEL to s.hereticMediaRepo).flatMap { (base, repo) ->
             listOfNotNull(base, Heretic.spec(base, repo).takeIf { Heretic.isRepo(repo) })
-        }
+        } + s.customModels.flatMap { listOfNotNull(it.spec, it.heretic) }
+
+    /** The custom model picked in the menu (or whose Heretic build is), if one is. */
+    private fun pickedCustom(s: AppSettings): CustomModel? =
+        s.customModels.firstOrNull { it.id == s.chatModel || it.heretic?.id == s.chatModel }
+
+    /** With Omni not installed, a picked custom model that sees photos describes them instead. */
+    private suspend fun pickedVision(): LoadTarget? {
+        val s = settings.value
+        if (pickedCustom(s)?.vision != true) return null
+        return picked(s)?.let { installed(it) }?.takeIf { it.mmprojPath != null }
+    }
 
     /** The model picked in the composer's menu, while it is still offered. */
     private fun picked(s: AppSettings): ModelSpec? = candidates(s).firstOrNull { it.id == s.chatModel }
@@ -194,7 +209,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
             // A reply runs until it ends or the context is full; a cut one can be continued.
             maxNewTokens = GenerationParams.UNTIL_CONTEXT_FULL,
             thinkBudget = s.thinkBudget,
-            tools = tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
+            // A custom model whose template has no tools is not offered them.
+            tools = if (pickedCustom(s)?.tools == false) emptyList()
+            else tools.filter { s.webSearch || it.spec.name !in WebTools.NAMES }.map { it.spec },
             speak = VoiceRoute.modelSpeaks(s.speakReplies, s.voiceEngine),
         )
     }

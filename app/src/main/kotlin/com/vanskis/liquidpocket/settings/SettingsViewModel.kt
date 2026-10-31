@@ -1,6 +1,8 @@
 package com.vanskis.liquidpocket.settings
 
 import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.LiquidPocketApp
@@ -10,12 +12,21 @@ import com.vanskis.liquidpocket.chat.Skill
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.VoiceEngine
 import com.vanskis.liquidpocket.core.ContextSize
+import com.vanskis.liquidpocket.core.CustomModel
+import com.vanskis.liquidpocket.core.GgufHeader
+import com.vanskis.liquidpocket.core.HttpFetcher
+import com.vanskis.liquidpocket.core.HuggingFace
 import com.vanskis.liquidpocket.core.ModelSpec
+import com.vanskis.liquidpocket.core.TemplateTraits
+import com.vanskis.liquidpocket.core.infoUrl
+import com.vanskis.liquidpocket.core.parseChatTemplate
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.ui.components.Indicators
+import com.vanskis.liquidpocket.ui.components.RepoLookup
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,7 +37,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.io.IOException
 import java.util.Locale
 
 /**
@@ -101,6 +115,115 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun downloadStatus(spec: ModelSpec): Flow<DownloadStatus> = graph.downloads.status(spec)
+
+    private val _lookup = MutableStateFlow<RepoLookup>(RepoLookup.Idle)
+
+    /** The Add model dialog's lookup of a Hugging Face repo. */
+    val lookup: StateFlow<RepoLookup> = _lookup.asStateFlow()
+
+    private val _importing = MutableStateFlow<String?>(null)
+
+    /** The progress line of a .gguf import under way, else null (or its error, until the next one). */
+    val importing: StateFlow<String?> = _importing.asStateFlow()
+
+    /** Lists [repo]'s single-file GGUF models, and reads what its chat template says it can do. */
+    fun lookUp(repo: String) {
+        _lookup.value = RepoLookup.Loading
+        viewModelScope.launch {
+            _lookup.value = try {
+                withContext(Dispatchers.IO) {
+                    val http = HttpFetcher()
+                    val files = HuggingFace.parseTree(http.fetchText(HuggingFace.treeUrl(repo)))
+                    val names = files.map { it.path.substringAfterLast('/').lowercase() }
+                    // A missing template only means no detection; the files still list.
+                    val template = runCatching { HuggingFace.parseChatTemplate(http.fetchText(HuggingFace.infoUrl(repo))) }.getOrNull()
+                    RepoLookup.Found(
+                        repo,
+                        files.filter { f -> val n = f.path.substringAfterLast('/').lowercase(); n.endsWith(".gguf") && "mmproj" !in n && !SHARD.containsMatchIn(n) },
+                        TemplateTraits.of(template),
+                        vision = names.any { it.endsWith(".gguf") && "mmproj" in it },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                RepoLookup.Failed("Could not look up $repo: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    fun dismissLookup() {
+        _lookup.value = RepoLookup.Idle
+    }
+
+    /** Stores [model] and starts its download. */
+    fun addCustomModel(model: CustomModel) {
+        viewModelScope.launch {
+            repo.putCustomModel(model)
+            download(model.spec)
+        }
+    }
+
+    fun changeCustomModel(model: CustomModel) {
+        viewModelScope.launch { repo.putCustomModel(model) }
+    }
+
+    /** Forgets [model] and deletes its files, and its Heretic build's. */
+    fun removeCustomModel(model: CustomModel) {
+        viewModelScope.launch {
+            listOfNotNull(model.spec, model.heretic).forEach {
+                graph.downloads.cancel(it)
+                graph.downloads.delete(it)
+            }
+            repo.removeCustomModel(model.id)
+        }
+    }
+
+    /** Copies the .gguf at [uri] into the models folder, reads its chat template, and adds it. */
+    fun importModel(uri: Uri) {
+        if (_importing.value?.startsWith(IMPORTING) == true) return
+        _importing.value = IMPORTING
+        viewModelScope.launch {
+            _importing.value = try {
+                val model = withContext(Dispatchers.IO) { copyIn(uri) }
+                repo.putCustomModel(model)
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "Import failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun copyIn(uri: Uri): CustomModel {
+        val resolver = getApplication<Application>().contentResolver
+        val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: uri.lastPathSegment ?: "model.gguf"
+        val file = if (name.endsWith(".gguf", ignoreCase = true)) name else "$name.gguf"
+        val template = resolver.openInputStream(uri)?.use(GgufHeader::chatTemplate) ?: throw IOException("Could not open the file")
+        val dest = graph.installer.importFile(file)
+        val part = File(dest.path + ".part")
+        resolver.openInputStream(uri)?.use { input ->
+            part.outputStream().use { out ->
+                val buf = ByteArray(1 shl 20)
+                var copied = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    copied += n
+                    _importing.value = "$IMPORTING ${copied / 1_000_000} MB"
+                }
+            }
+        } ?: throw IOException("Could not open the file")
+        if (!part.renameTo(dest)) throw IOException("Could not save the file")
+        val traits = TemplateTraits.of(template)
+        val model = CustomModel(CustomModel.idFor("", file), CustomModel.nameFor(file), "", file, tools = traits.tools, thinks = traits.thinks)
+        graph.installer.adopt(model.spec, dest)
+        return model
+    }
 
     /** Waits for Wi-Fi, as the first download does: these are over a gigabyte. */
     fun download(spec: ModelSpec) = graph.downloads.download(spec, allowMetered = false)
@@ -178,5 +301,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val SAVE_SETTLE_MS = 1_000L
+        const val IMPORTING = "Importing…"
+        val SHARD = Regex("""-\d{5}-of-\d{5}\.gguf$""")
     }
 }

@@ -23,6 +23,7 @@ import com.vanskis.liquidpocket.core.Heretic
 import com.vanskis.liquidpocket.core.HttpStatusException
 import com.vanskis.liquidpocket.core.InstallProgress
 import com.vanskis.liquidpocket.core.ModelCatalog
+import com.vanskis.liquidpocket.core.ModelSpecData
 import com.vanskis.liquidpocket.core.ModelSpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,9 @@ import java.io.IOException
 class ModelDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        // A custom model (or its Heretic build) is known only from the spec in the job's input.
         val spec = inputData.getString(KEY_MODEL_ID)?.let { ModelCatalog.byId(it) ?: Heretic.byId(it, inputData.getString(KEY_REPO)) }
+            ?: ModelSpecData.decode(inputData::getString)
             ?: return Result.failure(errorData("Unknown model"))
         val installer = (applicationContext as LiquidPocketApp).installer
         try {
