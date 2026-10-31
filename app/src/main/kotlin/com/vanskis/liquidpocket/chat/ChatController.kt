@@ -129,9 +129,13 @@ class ChatController(
     private val accelerator: () -> Accelerator = { Accelerator.CPU },
     /** The [EnvironmentAnchor] line saved with each message the user sends; null for none. */
     private val environment: () -> String? = { null },
+    private val savedState: SavedChatState? = null,
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
+
+    /** Conversation id whose state is currently held in the engine's memory cache. */
+    private var activeStateConversationId: Long? = null
 
     private val loadMutex = Mutex()
 
@@ -207,6 +211,7 @@ class ChatController(
             withContext(work) { engine.load(target.path, EngineConfig(target.contextSize, target.mmprojPath, accelerator)) }
             loadedFor = Triple(target.path, target.contextSize, accelerator)
             loadedName = target.name.ifEmpty { null }
+            activeStateConversationId = null
             true
         } catch (e: CancellationException) {
             throw e
@@ -304,6 +309,7 @@ class ChatController(
     fun newChat() = after { previous ->
         stopAndWait(previous)
         _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0, skill = null) }
+        activeStateConversationId = null
     }
 
     /** Uses [skill] for this chat from the next reply on; null drops it. */
@@ -315,6 +321,12 @@ class ChatController(
         val turns = persist { store.turns(conversationId) } ?: return@after
         val skill = turns.lastOrNull { it.role == Role.USER && !it.fromTool }?.skill
         _state.update { it.copy(conversationId = conversationId, turns = turns, error = null, contextUsed = 0, skill = skill) }
+        activeStateConversationId = null
+        ModelStateKey.from(engine.state.value)?.let { key ->
+            if (savedState?.load(conversationId, key) == true) {
+                activeStateConversationId = conversationId
+            }
+        }
         refreshContextUsed(systemMessage(lastParams), lastParams)
     }
 
@@ -323,9 +335,11 @@ class ChatController(
         if (_state.value.conversationId == conversationId) {
             stopAndWait(previous)
             _state.update { it.copy(conversationId = null, turns = emptyList(), error = null, contextUsed = 0) }
+            activeStateConversationId = null
         } else {
             previous?.join()
         }
+        savedState?.delete(conversationId)
         persist { store.deleteConversation(conversationId) }
     }
 
@@ -369,7 +383,11 @@ class ChatController(
                     val id = conversationId
                         ?: store.createConversation(ConversationTitle.from(turns.first { it.role == Role.USER }.titleText()))
                     conversationId = id
-                    if (dropped) store.truncate(id, keep)
+                    if (dropped) {
+                        savedState?.delete(id)
+                        activeStateConversationId = null
+                        store.truncate(id, keep)
+                    }
                     if (newUser != null) store.appendTurn(id, newUser)
                 }
                 _state.update { it.copy(conversationId = conversationId) }
@@ -377,6 +395,14 @@ class ChatController(
                 val system = systemMessage(params)
                 val target = route(turns, textOnly = false)
                 if (target != null && (!load(target) || stopRequested)) return@after
+                val currentConvId = conversationId
+                if (currentConvId != null && activeStateConversationId != currentConvId) {
+                    ModelStateKey.from(engine.state.value)?.let { key ->
+                        if (savedState?.load(currentConvId, key) == true) {
+                            activeStateConversationId = currentConvId
+                        }
+                    }
+                }
                 if (newUser != null) {
                     compactIfFull(system, params, conversationId)
                     if (stopRequested) return@after
@@ -392,6 +418,14 @@ class ChatController(
                 }
                 if (!stopRequested) captionPhotos(conversationId)
                 refreshContextUsed(system, params)
+                if (!stopRequested && conversationId != null) {
+                    val saveId = conversationId!!
+                    ModelStateKey.from(engine.state.value)?.let { key ->
+                        if (savedState?.save(saveId, key) == true) {
+                            activeStateConversationId = saveId
+                        }
+                    }
+                }
             } finally {
                 // A reply sent while this one captioned its photos owns the streaming state by now.
                 if (newestReply == id) _state.update { it.copy(streaming = null, streamingThinking = null, streamingThinkingTokens = 0, streamingTokens = 0, confirmation = null) }
@@ -504,6 +538,8 @@ class ChatController(
         val compacted = Compaction.compacted(turns, plan, summary)
         _state.update { it.copy(turns = compacted) }
         if (conversationId != null) {
+            savedState?.delete(conversationId)
+            activeStateConversationId = null
             withContext(NonCancellable) { persist { store.replaceFrom(conversationId, plan.cut, compacted.drop(plan.cut)) } }
         }
     }

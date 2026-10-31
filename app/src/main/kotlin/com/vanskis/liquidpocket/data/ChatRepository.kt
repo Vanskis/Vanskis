@@ -7,6 +7,7 @@ import com.vanskis.liquidpocket.chat.ChatStore
 import com.vanskis.liquidpocket.chat.Conversation
 import com.vanskis.liquidpocket.chat.ConversationTitle
 import com.vanskis.liquidpocket.chat.Fact
+import com.vanskis.liquidpocket.chat.SavedChatState
 import com.vanskis.liquidpocket.chat.SystemPrompt
 import com.vanskis.liquidpocket.chat.Turn
 import com.vanskis.liquidpocket.engine.GenerationStats
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.map
 class ChatRepository(
     private val dao: ChatDao,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val savedState: SavedChatState? = null,
 ) : ChatStore {
     /** Newest first. */
     val conversations: Flow<List<Conversation>> =
@@ -37,14 +39,21 @@ class ChatRepository(
         dao.appendMessage(turn.toEntity(conversationId, clock()))
     }
 
-    override suspend fun truncate(conversationId: Long, fromIndex: Int) = dao.truncate(conversationId, fromIndex)
+    override suspend fun truncate(conversationId: Long, fromIndex: Int) {
+        savedState?.delete(conversationId)
+        dao.truncate(conversationId, fromIndex)
+    }
 
     override suspend fun replaceFrom(conversationId: Long, fromIndex: Int, turns: List<Turn>) {
+        savedState?.delete(conversationId)
         val now = clock()
         dao.replaceMessages(conversationId, fromIndex, turns.map { it.toEntity(conversationId, now) })
     }
 
-    override suspend fun deleteConversation(conversationId: Long) = dao.deleteConversation(conversationId)
+    override suspend fun deleteConversation(conversationId: Long) {
+        savedState?.delete(conversationId)
+        dao.deleteConversation(conversationId)
+    }
 
     suspend fun rename(conversationId: Long, title: String) {
         dao.rename(conversationId, title.trim().ifEmpty { ConversationTitle.UNTITLED })
