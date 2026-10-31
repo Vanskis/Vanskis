@@ -295,7 +295,6 @@ internal class LlamaEngine(
                     },
                     startInThink = markers.getOrNull(3)?.isNotEmpty() == true,
                 )
-                val replyParser = ReplyParser(filter)
                 // Without speech output the reply is text only, as GenerationParams.speak allows.
                 val speaking = params.speak && _capabilities.value.audioOut
                 val counts = native {
@@ -345,20 +344,18 @@ internal class LlamaEngine(
                         continue
                     }
                     generated++
-                    val wasThinking = replyParser.thinking
-                    val chunks = replyParser.append(utf8.append(bytes))
-                    if (wasThinking || replyParser.thinking) thinkingTokens++
-                    for (chunk in chunks) {
-                        if (firstTokenMs == null && (chunk is ReplyChunk.Thinking || chunk is ReplyChunk.Text)) {
-                            firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
-                        }
-                        emit(chunk)
+                    val wasThinking = filter.thinking
+                    val shown = filter.append(utf8.append(bytes))
+                    if (wasThinking || filter.thinking) thinkingTokens++
+                    if (firstTokenMs == null && (shown.thinking.isNotEmpty() || shown.text.isNotEmpty())) {
+                        firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
                     }
-                    if (replyParser.thinking && thinkingTokens >= params.thinkBudget && !thinkClosed && !speaking && thinkEnd != null) {
+                    emitShown(shown)
+                    if (filter.thinking && thinkingTokens >= params.thinkBudget && !thinkClosed && !speaking && thinkEnd != null) {
                         thinkClosed = true
                         val close = "\n$thinkEnd\n\n"
                         if (native { LlamaNative.nativeForceText(close.toByteArray()) }) {
-                            for (c in replyParser.append(utf8.append(close.toByteArray()))) emit(c)
+                            emitShown(filter.append(utf8.append(close.toByteArray())))
                         }
                     }
                 }
@@ -371,13 +368,14 @@ internal class LlamaEngine(
                 // The speech decoder holds back the end of the last frame, also when maxNewTokens cut the reply.
                 if (speaking) native { LlamaNative.nativeTakeAudio(flush = true) }?.let { emit(ReplyChunk.Audio(it)) }
 
-                val rawParsed = native { LlamaNative.nativeParseReply() }?.map(::utf8)
-                val parsedReply = ParsedReply.of(rawParsed)
-                for (chunk in replyParser.complete(parsedReply)) {
-                    if (firstTokenMs == null && (chunk is ReplyChunk.Thinking || chunk is ReplyChunk.Text)) {
-                        firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
-                    }
-                    emit(chunk)
+                val parsed = native { LlamaNative.nativeParseReply() }?.map(::utf8)
+                val rest = filter.complete(parsed?.first())
+                if (firstTokenMs == null && (rest.thinking.isNotEmpty() || rest.text.isNotEmpty())) {
+                    firstTokenMs = (System.nanoTime() - startNanos) / 1_000_000
+                }
+                emitShown(rest)
+                parsed?.drop(1)?.chunked(2)?.forEach { (name, args) ->
+                    emit(ReplyChunk.ToolCall(ToolCall(name, args)))
                 }
             } catch (e: EngineException) {
                 // Raised before decoding started (e.g. the message is too long): the model is fine.
@@ -402,6 +400,11 @@ internal class LlamaEngine(
             }
         }
     }.flowOn(dispatcher)
+
+    private suspend fun FlowCollector<ReplyChunk>.emitShown(shown: ReplyFilter.Shown) {
+        if (shown.thinking.isNotEmpty()) emit(ReplyChunk.Thinking(shown.thinking))
+        if (shown.text.isNotEmpty()) emit(ReplyChunk.Text(shown.text))
+    }
 
     override fun stop() {
         stopRequested = true

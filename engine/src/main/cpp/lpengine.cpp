@@ -453,7 +453,7 @@ void collect_audio() {
 void speak_sample_next() {
     g_sampled = LLAMA_TOKEN_NULL;
     if (!g_gen.next_is_text()) return;
-    g_sampled = common_sampler_sample(g_sampler, g_ctx, -1, /* grammar_first */ true);
+    g_sampled = common_sampler_sample(g_sampler, g_ctx, -1);
     common_sampler_accept(g_sampler, g_sampled, true);
 }
 
@@ -1303,7 +1303,7 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeNextToken(JNIEnv * env, j
         LOGw("Context full (%d tokens), ending the reply", g_n_ctx);
         return nullptr;
     }
-    const llama_token token = common_sampler_sample(g_sampler, g_ctx, -1, /* grammar_first */ true);
+    const llama_token token = common_sampler_sample(g_sampler, g_ctx, -1);
     common_sampler_accept(g_sampler, token, true);
     if (llama_vocab_is_eog(g_vocab, token)) return nullptr;
 
@@ -1366,9 +1366,9 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeTakeAudio(JNIEnv * env, j
     return out;
 }
 
-// Parses the finished reply with the template's parser. Returns [reasoning_content, content, name,
-// arguments, name, arguments, ...] as UTF-8, or null when the template has no parser or the reply
-// does not match the template's format.
+// Parses the finished reply with the template's parser. Returns [content, name, arguments, name,
+// arguments, ...] as UTF-8, or null when the template has no parser (its "content" would be the raw
+// reply, markup included) or the reply does not match the template's format.
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeParseReply(JNIEnv * env, jobject /*thiz*/) {
     if (g_parser.parser.empty() || g_parser.format == COMMON_CHAT_FORMAT_CONTENT_ONLY) {
@@ -1377,7 +1377,6 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeParseReply(JNIEnv * env, 
     std::vector<std::string> out;
     try {
         const common_chat_msg msg = common_chat_parse(g_generated, /* is_partial */ false, g_parser);
-        out.push_back(msg.reasoning_content);
         out.push_back(msg.content);
         for (const auto & call : msg.tool_calls) {
             out.push_back(call.name);

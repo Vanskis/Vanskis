@@ -126,9 +126,8 @@ internal object LlamaNative {
     external fun nativeTakeAudio(flush: Boolean): FloatArray?
 
     /**
-     * Parses the finished reply with the chat template's parser: `[thinking, content, name,
-     * arguments, name, arguments, ...]` as UTF-8, or null when the template has no parser or the
-     * reply does not match the template's format.
+     * Parses the finished reply with the chat template's parser: `[content, name, arguments, name,
+     * arguments, ...]` as UTF-8, or null when the reply does not match the template's format.
      */
     external fun nativeParseReply(): Array<ByteArray>?
 
