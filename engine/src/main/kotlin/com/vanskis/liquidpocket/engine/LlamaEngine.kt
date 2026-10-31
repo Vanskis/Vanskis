@@ -162,6 +162,26 @@ internal class LlamaEngine(
         }
     }
 
+    override suspend fun saveState(file: File): Long = mutex.withLock {
+        withContext(dispatcher) {
+            try {
+                LlamaNative.nativeSaveState(file.absolutePath)
+            } catch (_: Exception) {
+                0L
+            }
+        }
+    }
+
+    override suspend fun loadState(file: File): Int = mutex.withLock {
+        withContext(dispatcher) {
+            try {
+                LlamaNative.nativeLoadState(file.absolutePath)
+            } catch (_: Exception) {
+                0
+            }
+        }
+    }
+
     override suspend fun benchmark(chargeMicroAh: () -> Long?): BenchResult {
         val (start, config) = current() ?: throw EngineException("No model loaded")
         val statsBefore = _lastStats.value
@@ -352,6 +372,8 @@ internal class LlamaEngine(
                 )
             } finally {
                 if (stateFile.exists()) stateFile.delete()
+                val textFile = File(stateFile.parentFile, "${stateFile.name}.text")
+                if (textFile.exists()) textFile.delete()
                 LlamaNative.nativeResetCache()
             }
         }
