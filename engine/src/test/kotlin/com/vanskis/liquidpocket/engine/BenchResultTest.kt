@@ -17,6 +17,17 @@ class BenchResultTest {
         assertEquals("The NPU is slower than the CPU (0.5×).", BenchResult(20.0, 10.0).verdict)
     }
 
+    @Test fun `same reply speed with faster prompt reading says so`() {
+        assertEquals(
+            "Replies come at about the same speed, but the NPU reads prompts 1.4× faster.",
+            BenchResult(41.1, 44.2, cpuPrefillTokPerSec = 227.5, npuPrefillTokPerSec = 315.2).verdict,
+        )
+        assertEquals(
+            "About the same: the NPU is not speeding this model up.",
+            BenchResult(41.1, 44.2, cpuPrefillTokPerSec = 227.5, npuPrefillTokPerSec = 240.0).verdict,
+        )
+    }
+
     @Test fun `no NPU run has no verdict`() {
         assertNull(BenchResult(20.0, null, "No NPU in this build").verdict)
         assertNull(BenchResult(0.0, 10.0).verdict)

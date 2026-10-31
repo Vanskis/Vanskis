@@ -136,7 +136,15 @@ data class BenchResult(
             return when {
                 ratio >= FASTER -> String.format(Locale.ROOT, "The NPU is %.1f× faster than the CPU.", ratio)
                 ratio <= SLOWER -> String.format(Locale.ROOT, "The NPU is slower than the CPU (%.1f×).", ratio)
-                else -> "About the same: the NPU is not speeding this model up."
+                else -> {
+                    // Replies at the same speed can still start sooner when the NPU reads the prompt faster.
+                    val prefill = ratio(npuPrefillTokPerSec, cpuPrefillTokPerSec)
+                    if (prefill != null && prefill >= FASTER) {
+                        String.format(Locale.ROOT, "Replies come at about the same speed, but the NPU reads prompts %.1f× faster.", prefill)
+                    } else {
+                        "About the same: the NPU is not speeding this model up."
+                    }
+                }
             }
         }
 }

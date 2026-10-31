@@ -114,10 +114,9 @@ Key places in `app/src/main/kotlin/com/vanskis/liquidpocket/`:
 
 ## Unverified: needs the phone
 
-- **Display math:** check that it renders after the fix in 92eabdc. The reported case was
-  `\[ 4 + 5 + x + 0 = 5 \times 4 = 20. \]` followed by "Solving for \(x\)".
-- **Omni thinking:** `ModelCatalog.LFM3_OMNI_2B` has `thinks = false`. That is an assumption, not a
-  verified fact. If Omni can think, set it to true so the menu shows thinking levels for it.
+- **Confirmed on the phone (2026-10-31):** display math renders, and Omni cannot think
+  (`thinks = false` is right). NPU bench on LFM3-1.7B: reply 41.1 (CPU) vs 44.2 (NPU) tok/s,
+  prompt reading 227.5 vs 315.2 tok/s, 99% of ops on the NPU, so the NPU is picked.
 - **Custom models end to end:**
   - a Hugging Face lookup on a real repo;
   - an import of a large file;
