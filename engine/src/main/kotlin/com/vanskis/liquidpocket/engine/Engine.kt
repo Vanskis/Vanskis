@@ -69,6 +69,17 @@ interface Engine {
      */
     suspend fun benchmark(chargeMicroAh: () -> Long? = { null }): BenchResult =
         throw UnsupportedOperationException("benchmark is not implemented by ${javaClass.simpleName}")
+
+    /**
+     * Measures performance: TTFT for short and ~8K prompts plus load time, process and system memory
+     * with the chat model and Omni weights, and state save/load times for 8K (and 32K if allowed).
+     */
+    suspend fun measure(
+        cacheDir: java.io.File,
+        omniModelPath: String?,
+        readMemory: () -> MemorySnapshot,
+    ): MeasureResult =
+        throw UnsupportedOperationException("measure is not implemented by ${javaClass.simpleName}")
 }
 
 /** Where the model's layers run. */
