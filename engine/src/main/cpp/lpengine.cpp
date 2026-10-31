@@ -1402,7 +1402,7 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadExtraModel(JNIEnv * e
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
     // Read the weights into memory: a memory-mapped model is not counted until its pages are touched.
-    mparams.use_mmap = false;
+    mparams.load_mode = LLAMA_LOAD_MODE_NONE;
     try {
         g_extra_model = llama_model_load_from_file(path.c_str(), mparams);
     } catch (...) {
