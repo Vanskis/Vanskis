@@ -80,10 +80,6 @@ internal class LlamaEngine(
 
     override val npuCrashedLastRun: Boolean = crashGuard?.crashedLastRun == true
 
-    /** Duration of the last successful model load in milliseconds. */
-    var lastLoadDurationMs: Long = 0L
-        private set
-
     /** Set from an NPU load until its first reply runs to the end; engine thread. */
     private var npuUnproven = false
 
@@ -107,7 +103,6 @@ internal class LlamaEngine(
         mutex.withLock {
             withContext(dispatcher) {
                 _state.value = EngineState.Loading
-                val tLoad0 = System.nanoTime()
                 try {
                     if (!nativeReady) {
                         System.loadLibrary("lpengine")
@@ -138,7 +133,6 @@ internal class LlamaEngine(
                     loaded = ready
                     loadedConfig = config
                     _capabilities.value = caps
-                    lastLoadDurationMs = (System.nanoTime() - tLoad0) / 1_000_000
                     _state.value = ready
                 } catch (e: CancellationException) {
                     disarmNpu()
@@ -213,7 +207,9 @@ internal class LlamaEngine(
             val shortPrefillSpeed = _lastStats.value?.prefillTokensPerSecond
             val shortResult = TtftResult(shortTokens, shortTtftMs, shortPrefillSpeed)
 
-            val longPrompt = buildMeasurementPrompt(8000)
+            // The "8K" prompt must fit the context with room to spare (the default context is 8K).
+            val ctx = start.contextSize
+            val longPrompt = buildMeasurementPrompt(minOf(8192, ctx) - PROMPT_SPARE)
             val tLong0 = System.nanoTime()
             chat(longPrompt, GenerationParams(temperature = 0f, maxNewTokens = 1, think = false)).collect {}
             val longTtftMs = _lastStats.value?.timeToFirstTokenMs ?: ((System.nanoTime() - tLong0) / 1_000_000)
@@ -262,14 +258,13 @@ internal class LlamaEngine(
             // Group 3: Saved chat state for 8K and 32K
             val state8k = measureState(8000, longPrompt, cacheDir, "8k")
 
-            val currentCtx = current()?.first?.contextSize ?: 0
             var state32k: StateMeasureResult? = null
             var state32kNote: String? = null
-            if (currentCtx >= 32000) {
-                val prompt32k = buildMeasurementPrompt(32000)
+            if (ctx >= 32768) {
+                val prompt32k = buildMeasurementPrompt(32768 - PROMPT_SPARE)
                 state32k = measureState(32000, prompt32k, cacheDir, "32k")
             } else {
-                state32kNote = "Context size ($currentCtx) does not allow 32K tokens"
+                state32kNote = "Context size ($ctx) does not allow 32K tokens"
             }
 
             val ready = current()?.first ?: start
@@ -364,7 +359,8 @@ internal class LlamaEngine(
 
     private fun buildMeasurementPrompt(targetTokens: Int): List<ChatMessage> {
         val block = "The quick brown fox jumps over the lazy dog. A slow red turtle crawls beneath the sunny sky. "
-        val reps = maxOf(1, targetTokens / 20)
+        // About 21 tokens per block; 25 keeps the prompt under the target. The real count is reported.
+        val reps = maxOf(1, targetTokens / 25)
         val text = buildString(reps * block.length) {
             repeat(reps) { append(block) }
         }
@@ -623,6 +619,9 @@ internal class LlamaEngine(
     private fun perSecond(tokens: Int, nanos: Long): Double = if (nanos <= 0) 0.0 else tokens * 1e9 / nanos
 
     private companion object {
+        /** Context left free by measurement prompts for the template and the reply. */
+        const val PROMPT_SPARE = 1024
+
         const val TAG = "LlamaEngine"
         /** A reply that ends this close to the context size ran out of room rather than finishing. */
         const val CONTEXT_FULL_SLACK = 8
