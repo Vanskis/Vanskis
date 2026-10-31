@@ -46,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vanskis.liquidpocket.ACTIVE_MODEL
 import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.chat.InstructionPresets
+import com.vanskis.liquidpocket.chat.ModelChoice
 import com.vanskis.liquidpocket.ui.components.SkillEditor
 import com.vanskis.liquidpocket.chat.LiveVoiceModel
 import com.vanskis.liquidpocket.chat.SystemPrompt
@@ -57,6 +58,7 @@ import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.ui.components.HereticPicker
 import com.vanskis.liquidpocket.ui.components.CustomModelActions
 import com.vanskis.liquidpocket.ui.components.CustomModelsSection
+import com.vanskis.liquidpocket.ui.components.ModelTuningSection
 import com.vanskis.liquidpocket.ui.components.downloadLine
 import com.vanskis.liquidpocket.engine.EngineState
 import com.vanskis.liquidpocket.settings.AppSettings
@@ -358,6 +360,13 @@ fun SettingsScreen(
                     download = vm::download,
                     cancel = vm::cancelDownload,
                 ),
+            )
+
+            ModelTuningSection(
+                listOf(ACTIVE_MODEL, MEDIA_MODEL).map { ModelChoice(it.id, it.displayName, it.thinks) } +
+                    saved.customModels.map { ModelChoice(it.id, it.name, it.thinks) },
+                settings.tunings,
+                vm::setTuning,
             )
 
             OutlinedButton(onClick = onManageModel, modifier = Modifier.padding(top = 24.dp)) { Text("Manage model") }

@@ -109,6 +109,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setUserSkills(value: List<Skill>) = edit { it.copy(userSkills = value) }
 
+    /** [id]'s own settings; the defaults clear them. */
+    fun setTuning(id: String, value: ModelTuning) = edit { s ->
+        val clean = value.clamped()
+        s.copy(tunings = if (clean == ModelTuning()) s.tunings - id else s.tunings + (id to clean))
+    }
+
     fun setHeretic(media: Boolean, use: Boolean, repo: String) = edit {
         // A text model choice in Settings replaces the one picked in the composer's menu.
         if (media) it.copy(hereticMedia = use, hereticMediaRepo = repo) else it.copy(hereticText = use, hereticTextRepo = repo, chatModel = "")

@@ -32,6 +32,7 @@ import com.vanskis.liquidpocket.media.ReplySpeaker
 import com.vanskis.liquidpocket.media.StreamingRecorder
 import com.vanskis.liquidpocket.media.VoiceRecorder
 import com.vanskis.liquidpocket.settings.AppSettings
+import com.vanskis.liquidpocket.settings.ModelTuning
 import com.vanskis.liquidpocket.tools.PermissionGate
 import com.vanskis.liquidpocket.tools.WebTools
 import com.vanskis.liquidpocket.tools.phoneTools
@@ -116,7 +117,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     private val controller = ChatController(
         graph.engine, graph.chats, viewModelScope, Dispatchers.IO, tools, media = graph.media,
         documents = DocumentLoader(graph.documents::load), sink = sink, models = models,
-        customInstructions = { settings.value.customInstructions },
+        customInstructions = { listOf(settings.value.customInstructions, tuning().instructions).filter { it.isNotBlank() }.joinToString("\n\n") },
         accelerator = { if (settings.value.useNpu) Accelerator.NPU else Accelerator.CPU },
         environment = PhoneStateProbe(app, { graph.engine.state.value })::line,
     )
@@ -202,12 +203,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app), ChatActions {
     /** Dictated text for the composer to add to its field, then [transcriptUsed]. */
     val transcript: StateFlow<String?> = _transcript.asStateFlow()
 
+    /** The selected model's own settings. */
+    private fun tuning(): ModelTuning = ModelTuning.of(_modelMenu.value.selected, settings.value.tunings)
+
     private fun params(): GenerationParams {
         val s = settings.value
+        val tuning = tuning()
         return GenerationParams(
             temperature = s.temperature,
-            // A reply runs until it ends or the context is full; a cut one can be continued.
-            maxNewTokens = GenerationParams.UNTIL_CONTEXT_FULL,
+            // A reply runs until it ends, the model's limit or the context is full; a cut one can be continued.
+            maxNewTokens = tuning.maxNewTokens,
+            sampling = tuning.sampling,
             thinkBudget = s.thinkBudget,
             // A custom model whose template has no tools is not offered them.
             tools = if (pickedCustom(s)?.tools == false) emptyList()

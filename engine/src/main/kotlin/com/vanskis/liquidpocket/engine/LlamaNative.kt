@@ -82,6 +82,9 @@ internal object LlamaNative {
         temperature: Float,
         speak: Boolean,
         think: Boolean,
+        /** [Sampling]: `[topP, minP, repeatPenalty]` and `[topK, seed]` (seed -1: random). */
+        samplingF: FloatArray,
+        samplingI: IntArray,
     ): IntArray
 
     /**

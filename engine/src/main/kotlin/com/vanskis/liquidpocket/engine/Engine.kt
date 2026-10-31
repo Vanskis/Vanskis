@@ -159,10 +159,27 @@ data class GenerationParams(
      * reasoning streams as [ReplyChunk.Thinking]. Ignored by models without thinking.
      */
     val think: Boolean = true,
+    val sampling: Sampling = Sampling(),
 ) {
     companion object {
         const val UNTIL_CONTEXT_FULL = Int.MAX_VALUE
         const val REPLY_ROOM = 1024
+    }
+}
+
+/**
+ * How tokens are picked besides the temperature; the defaults are llama.cpp's. [topK] 0 and [topP] 1
+ * turn those filters off, [minP] 0 and [repeatPenalty] 1 likewise; [seed] [RANDOM_SEED] differs each reply.
+ */
+data class Sampling(
+    val topP: Float = 0.95f,
+    val topK: Int = 40,
+    val minP: Float = 0.05f,
+    val repeatPenalty: Float = 1.0f,
+    val seed: Int = RANDOM_SEED,
+) {
+    companion object {
+        const val RANDOM_SEED = -1
     }
 }
 

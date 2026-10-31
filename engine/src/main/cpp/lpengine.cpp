@@ -987,7 +987,8 @@ extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
         JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents, jobjectArray tool_names,
         jobjectArray tool_calls, jintArray media_msg, jintArray media_kind, jintArray media_dims,
-        jobjectArray media_data, jobjectArray tools, jfloat temperature, jboolean jspeak, jboolean jthink) {
+        jobjectArray media_data, jobjectArray tools, jfloat temperature, jboolean jspeak, jboolean jthink,
+        jfloatArray sampling_f, jintArray sampling_i) {
     if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return nullptr; }
     settle_speech();
     reset_speech();
@@ -1088,6 +1089,20 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
     if (g_sampler != nullptr) { common_sampler_free(g_sampler); g_sampler = nullptr; }
     common_params_sampling sparams;
     sparams.temp = temperature;
+    // [topP, minP, repeatPenalty] and [topK, seed]; a negative seed keeps the random default.
+    if (sampling_f != nullptr && env->GetArrayLength(sampling_f) >= 3) {
+        jfloat f[3];
+        env->GetFloatArrayRegion(sampling_f, 0, 3, f);
+        sparams.top_p = f[0];
+        sparams.min_p = f[1];
+        sparams.penalty_repeat = f[2];
+    }
+    if (sampling_i != nullptr && env->GetArrayLength(sampling_i) >= 2) {
+        jint i[2];
+        env->GetIntArrayRegion(sampling_i, 0, 2, i);
+        sparams.top_k = i[0];
+        if (i[1] >= 0) sparams.seed = (uint32_t) i[1];
+    }
     if (!params.grammar.empty()) sparams.grammar = common_grammar(COMMON_GRAMMAR_TYPE_TOOL_CALLS, params.grammar);
     sparams.grammar_lazy = params.grammar_lazy;
     sparams.generation_prompt = params.generation_prompt;

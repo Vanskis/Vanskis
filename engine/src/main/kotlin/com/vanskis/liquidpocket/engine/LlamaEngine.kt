@@ -302,6 +302,8 @@ internal class LlamaEngine(
                         p.roles, p.contents, p.toolNames, p.toolCalls,
                         p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
                         params.temperature, speaking, params.think,
+                        params.sampling.let { floatArrayOf(it.topP, it.minP, it.repeatPenalty) },
+                        params.sampling.let { intArrayOf(it.topK, it.seed) },
                     )
                 }
                 promptTokens = counts[0]

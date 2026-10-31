@@ -57,6 +57,8 @@ data class AppSettings(
     val userSkills: List<Skill> = emptyList(),
     /** Models the user added from Hugging Face or the phone ([CustomModel]). */
     val customModels: List<CustomModel> = emptyList(),
+    /** Each model's own sampling, reply length and instructions, by model id ([ModelTuning]). */
+    val tunings: Map<String, ModelTuning> = emptyMap(),
     /** Use a Heretic build of LFM3-1.7B from [hereticTextRepo] instead of the standard one. */
     val hereticText: Boolean = false,
     val hereticTextRepo: String = "",
@@ -104,6 +106,7 @@ class SettingsRepository(context: Context) {
                 liveVoiceModel = LiveVoiceModel.entries.firstOrNull { it.name == prefs[LIVE_VOICE_MODEL] },
                 userSkills = Skills.decode(prefs[USER_SKILLS]),
                 customModels = CustomModel.decode(prefs[CUSTOM_MODELS]),
+                tunings = ModelTuning.decode(prefs[MODEL_TUNING]),
                 hereticText = prefs[HERETIC_TEXT] ?: false,
                 hereticTextRepo = prefs[HERETIC_TEXT_REPO] ?: "",
                 hereticMedia = prefs[HERETIC_MEDIA] ?: false,
@@ -141,6 +144,7 @@ class SettingsRepository(context: Context) {
             value.liveVoiceModel?.let { model -> it[LIVE_VOICE_MODEL] = model.name }
             it[USER_SKILLS] = Skills.encode(value.userSkills)
             it[CUSTOM_MODELS] = CustomModel.encode(value.customModels)
+            it[MODEL_TUNING] = ModelTuning.encode(value.tunings)
             it[HERETIC_TEXT] = value.hereticText
             it[HERETIC_TEXT_REPO] = value.hereticTextRepo.trim()
             it[HERETIC_MEDIA] = value.hereticMedia
@@ -230,6 +234,7 @@ class SettingsRepository(context: Context) {
         val CUSTOM_INSTRUCTIONS = stringPreferencesKey("custom_instructions")
         val USER_SKILLS = stringPreferencesKey("user_skills")
         val CUSTOM_MODELS = stringPreferencesKey("custom_models")
+        val MODEL_TUNING = stringPreferencesKey("model_tuning")
         val HERETIC_TEXT = booleanPreferencesKey("heretic_text")
         val HERETIC_TEXT_REPO = stringPreferencesKey("heretic_text_repo")
         val HERETIC_MEDIA = booleanPreferencesKey("heretic_media")
