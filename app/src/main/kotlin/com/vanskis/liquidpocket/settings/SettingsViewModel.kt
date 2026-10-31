@@ -23,6 +23,7 @@ import com.vanskis.liquidpocket.core.parseChatTemplate
 import com.vanskis.liquidpocket.download.DownloadStatus
 import com.vanskis.liquidpocket.engine.BenchResult
 import com.vanskis.liquidpocket.engine.EngineState
+import com.vanskis.liquidpocket.engine.MemorySnapshot
 import com.vanskis.liquidpocket.ui.components.Indicators
 import com.vanskis.liquidpocket.ui.components.RepoLookup
 import kotlinx.coroutines.CancellationException
@@ -81,6 +82,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     /** The last benchmark's result or error, null before the first run. */
     private val _benchmark = MutableStateFlow<String?>(null)
     val benchmark: StateFlow<String?> = _benchmark.asStateFlow()
+
+    private val _measuring = MutableStateFlow(false)
+    val measuring: StateFlow<Boolean> = _measuring.asStateFlow()
+
+    /** The last measurement result or error, null before the first run. */
+    private val _measurement = MutableStateFlow<String?>(null)
+    val measurement: StateFlow<String?> = _measurement.asStateFlow()
 
     /** Whether Omni is installed, which live voice needs to use it. */
     val omniInstalled: StateFlow<Boolean> =
@@ -276,6 +284,43 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 _benchmark.value = "Benchmark failed: ${e.message ?: e.javaClass.simpleName}"
             } finally {
                 _benchmarking.value = false
+            }
+        }
+    }
+
+    /**
+     * Measures TTFT, load time, memory with the chat model and Omni, and saved chat state; ignored
+     * while one runs or a reply is generating.
+     */
+    fun runMeasure() {
+        if (_measuring.value || _benchmarking.value || engine.state.value == EngineState.Generating) return
+        _measuring.value = true
+        viewModelScope.launch {
+            try {
+                val omniFile = withContext(Dispatchers.IO) {
+                    graph.installer.installedFile(MEDIA_MODEL)
+                }
+                val app = getApplication<Application>()
+                val cacheDir = app.cacheDir
+                val result = engine.measure(cacheDir, omniFile?.absolutePath) {
+                    val am = app.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                    val mi = android.app.ActivityManager.MemoryInfo()
+                    am.getMemoryInfo(mi)
+                    MemorySnapshot(
+                        pssKb = android.os.Debug.getPss(),
+                        nativeHeapBytes = android.os.Debug.getNativeHeapAllocatedSize(),
+                        availMemBytes = mi.availMem,
+                        totalMemBytes = mi.totalMem,
+                        lowMemory = mi.lowMemory,
+                    )
+                }
+                _measurement.value = result.describe()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _measurement.value = "Measurement failed: ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                _measuring.value = false
             }
         }
     }

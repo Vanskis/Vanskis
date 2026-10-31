@@ -243,6 +243,7 @@ bool count_op(struct ggml_tensor * t, bool ask, void * /*user*/) {
 }
 
 llama_model * g_model = nullptr;
+llama_model * g_extra_model = nullptr;
 llama_context * g_ctx = nullptr;
 const llama_vocab * g_vocab = nullptr;
 mtmd_context * g_mtmd = nullptr;
@@ -475,6 +476,7 @@ void free_all() {
     g_batch = common_batch();
     if (g_mtmd != nullptr) { mtmd_free(g_mtmd); g_mtmd = nullptr; }
     if (g_ctx != nullptr) { llama_free(g_ctx); g_ctx = nullptr; }
+    if (g_extra_model != nullptr) { llama_model_free(g_extra_model); g_extra_model = nullptr; }
     if (g_model != nullptr) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
     g_n_ctx = 0;
@@ -1387,4 +1389,86 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeParseReply(JNIEnv * env, 
         return nullptr;
     }
     return to_jbytes_array(env, out);
+}
+
+// Loads an extra model (CPU weights only) alongside the chat model for memory measurement.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadExtraModel(JNIEnv * env, jobject /*thiz*/, jstring jpath) {
+    if (g_extra_model != nullptr) {
+        llama_model_free(g_extra_model);
+        g_extra_model = nullptr;
+    }
+    const std::string path = jstring_to_std(env, jpath);
+    llama_model_params mparams = llama_model_default_params();
+    mparams.n_gpu_layers = 0;
+    try {
+        g_extra_model = llama_model_load_from_file(path.c_str(), mparams);
+    } catch (...) {
+        g_extra_model = nullptr;
+    }
+    return g_extra_model != nullptr ? JNI_TRUE : JNI_FALSE;
+}
+
+// Frees the extra model loaded by nativeLoadExtraModel.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeFreeExtraModel(JNIEnv * /*env*/, jobject /*thiz*/) {
+    if (g_extra_model != nullptr) {
+        llama_model_free(g_extra_model);
+        g_extra_model = nullptr;
+    }
+}
+
+// Saves sequence 0 state (KV cache + cached tokens) to jpath.
+// Returns the number of bytes written, or throws on failure.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeSaveState(JNIEnv * env, jobject /*thiz*/, jstring jpath) {
+    if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return 0; }
+    const std::string path = jstring_to_std(env, jpath);
+    std::vector<llama_token> tokens;
+    tokens.reserve(g_cached.size());
+    for (const auto & u : g_cached) {
+        if (u.token != LLAMA_TOKEN_NULL) tokens.push_back(u.token);
+    }
+    const size_t bytes = llama_state_seq_save_file(g_ctx, path.c_str(), 0, tokens.data(), tokens.size());
+    if (bytes == 0) {
+        throw_java(env, "Failed to save sequence state to " + path);
+        return 0;
+    }
+    return static_cast<jlong>(bytes);
+}
+
+// Loads sequence 0 state from jpath. Returns number of tokens restored, or throws on failure.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadState(JNIEnv * env, jobject /*thiz*/, jstring jpath) {
+    if (g_ctx == nullptr) { throw_java(env, "No model loaded"); return 0; }
+    const std::string path = jstring_to_std(env, jpath);
+    size_t n_tokens = 0;
+    const size_t probe = llama_state_seq_load_file(g_ctx, path.c_str(), 0, nullptr, 0, &n_tokens);
+    if (probe == 0) {
+        throw_java(env, "Failed to read sequence state header from " + path);
+        return 0;
+    }
+    std::vector<llama_token> tokens(n_tokens);
+    reset_cache();
+    const size_t bytes = llama_state_seq_load_file(g_ctx, path.c_str(), 0, tokens.data(), tokens.size(), &n_tokens);
+    if (bytes == 0) {
+        throw_java(env, "Failed to load sequence state from " + path);
+        return 0;
+    }
+    for (llama_token tok : tokens) {
+        unit u;
+        u.token = tok;
+        u.n_pos = 1;
+        u.n_tokens = 1;
+        g_cached.push_back(u);
+        g_n_past += 1;
+        g_n_tokens += 1;
+    }
+    return static_cast<jint>(n_tokens);
+}
+
+// Clears sequence 0 memory cache and resets pending units.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeResetCache(JNIEnv * /*env*/, jobject /*thiz*/) {
+    reset_cache();
 }

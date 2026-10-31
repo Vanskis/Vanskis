@@ -80,6 +80,10 @@ internal class LlamaEngine(
 
     override val npuCrashedLastRun: Boolean = crashGuard?.crashedLastRun == true
 
+    /** Duration of the last successful model load in milliseconds. */
+    var lastLoadDurationMs: Long = 0L
+        private set
+
     /** Set from an NPU load until its first reply runs to the end; engine thread. */
     private var npuUnproven = false
 
@@ -103,6 +107,7 @@ internal class LlamaEngine(
         mutex.withLock {
             withContext(dispatcher) {
                 _state.value = EngineState.Loading
+                val tLoad0 = System.nanoTime()
                 try {
                     if (!nativeReady) {
                         System.loadLibrary("lpengine")
@@ -133,6 +138,7 @@ internal class LlamaEngine(
                     loaded = ready
                     loadedConfig = config
                     _capabilities.value = caps
+                    lastLoadDurationMs = (System.nanoTime() - tLoad0) / 1_000_000
                     _state.value = ready
                 } catch (e: CancellationException) {
                     disarmNpu()
@@ -183,6 +189,186 @@ internal class LlamaEngine(
                 _lastStats.value = statsBefore
             }
         }
+    }
+
+    override suspend fun measure(
+        cacheDir: File,
+        omniModelPath: String?,
+        readMemory: () -> MemorySnapshot,
+    ): MeasureResult {
+        val (start, config) = current() ?: throw EngineException("No model loaded")
+        val statsBefore = _lastStats.value
+        try {
+            // Measure model load time freshly by reloading the current model
+            val tLoad0 = System.nanoTime()
+            load(start.modelPath, config)
+            val loadTimeMs = (System.nanoTime() - tLoad0) / 1_000_000
+
+            // Group 1: TTFT for short prompt and ~8K prompt
+            val shortPrompt = listOf(ChatMessage(Role.USER, "Count from 1 to 100, separated by commas."))
+            val tShort0 = System.nanoTime()
+            chat(shortPrompt, GenerationParams(temperature = 0f, maxNewTokens = 1, think = false)).collect {}
+            val shortTtftMs = _lastStats.value?.timeToFirstTokenMs ?: ((System.nanoTime() - tShort0) / 1_000_000)
+            val shortTokens = _lastStats.value?.promptTokens ?: 0
+            val shortPrefillSpeed = _lastStats.value?.prefillTokensPerSecond
+            val shortResult = TtftResult(shortTokens, shortTtftMs, shortPrefillSpeed)
+
+            val longPrompt = buildMeasurementPrompt(8000)
+            val tLong0 = System.nanoTime()
+            chat(longPrompt, GenerationParams(temperature = 0f, maxNewTokens = 1, think = false)).collect {}
+            val longTtftMs = _lastStats.value?.timeToFirstTokenMs ?: ((System.nanoTime() - tLong0) / 1_000_000)
+            val longTokens = _lastStats.value?.promptTokens ?: 8000
+            val longPrefillSpeed = _lastStats.value?.prefillTokensPerSecond
+            val longResult = TtftResult(longTokens, longTtftMs, longPrefillSpeed)
+
+            // Group 2: Memory
+            val chatMemory = readMemory()
+            var omniSnapshot: MemorySnapshot? = null
+            var omniError: String? = null
+            val omniInstalled = omniModelPath != null && File(omniModelPath).canRead()
+            if (omniInstalled) {
+                try {
+                    val loaded = mutex.withLock {
+                        withContext(dispatcher) {
+                            LlamaNative.nativeLoadExtraModel(omniModelPath!!)
+                        }
+                    }
+                    if (!loaded) {
+                        omniError = "Failed to load extra model weights"
+                    } else {
+                        val snap = readMemory()
+                        omniSnapshot = snap
+                        if (snap.lowMemory) {
+                            omniError = "Phone signaled low memory"
+                        }
+                    }
+                } catch (e: Exception) {
+                    omniError = e.message ?: e.javaClass.simpleName
+                } finally {
+                    mutex.withLock {
+                        withContext(dispatcher) {
+                            LlamaNative.nativeFreeExtraModel()
+                        }
+                    }
+                }
+            }
+            val omniResult = OmniMemoryResult(
+                installed = omniInstalled,
+                snapshot = omniSnapshot,
+                error = omniError,
+                extraModelFreed = true,
+            )
+
+            // Group 3: Saved chat state for 8K and 32K
+            val state8k = measureState(8000, longPrompt, cacheDir, "8k")
+
+            val currentCtx = current()?.first?.contextSize ?: 0
+            var state32k: StateMeasureResult? = null
+            var state32kNote: String? = null
+            if (currentCtx >= 32000) {
+                val prompt32k = buildMeasurementPrompt(32000)
+                state32k = measureState(32000, prompt32k, cacheDir, "32k")
+            } else {
+                state32kNote = "Context size ($currentCtx) does not allow 32K tokens"
+            }
+
+            val ready = current()?.first ?: start
+            return MeasureResult(
+                modelName = File(ready.modelPath).nameWithoutExtension,
+                accelerator = ready.accelerator,
+                modelLoadTimeMs = loadTimeMs,
+                shortPrompt = shortResult,
+                longPrompt = longResult,
+                chatMemory = chatMemory,
+                omniMemory = omniResult,
+                state8k = state8k,
+                state32k = state32k,
+                state32kNote = state32kNote,
+            )
+        } finally {
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    withContext(dispatcher) {
+                        LlamaNative.nativeFreeExtraModel()
+                        LlamaNative.nativeResetCache()
+                    }
+                }
+                _lastStats.value = statsBefore
+            }
+        }
+    }
+
+    private suspend fun measureState(
+        targetTokens: Int,
+        prompt: List<ChatMessage>,
+        cacheDir: File,
+        tag: String,
+    ): StateMeasureResult = mutex.withLock {
+        withContext(dispatcher) {
+            val stateFile = File(cacheDir, "measure_state_$tag.bin")
+            try {
+                // Prefill prompt
+                LlamaNative.nativeResetCache()
+                val p = NativePrompt.of(prompt, emptyList())
+                val counts = LlamaNative.nativeBeginReply(
+                    p.roles, p.contents, p.toolNames, p.toolCalls,
+                    p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                    0f, false, false,
+                    floatArrayOf(1f, 0f, 1f), intArrayOf(1, -1),
+                )
+                val tokens = counts[0]
+                var remaining = counts[1]
+                while (remaining > 0) {
+                    remaining = LlamaNative.nativePrefillStep()
+                }
+
+                // Time saving state
+                val tSave0 = System.nanoTime()
+                val bytes = LlamaNative.nativeSaveState(stateFile.absolutePath)
+                val saveMs = (System.nanoTime() - tSave0) / 1_000_000
+
+                // Time loading state after clearing cache
+                LlamaNative.nativeResetCache()
+                val tLoad0 = System.nanoTime()
+                LlamaNative.nativeLoadState(stateFile.absolutePath)
+                val loadMs = (System.nanoTime() - tLoad0) / 1_000_000
+
+                // Time re-prefilling the same prompt after clearing cache
+                LlamaNative.nativeResetCache()
+                val tReprefill0 = System.nanoTime()
+                val countsRe = LlamaNative.nativeBeginReply(
+                    p.roles, p.contents, p.toolNames, p.toolCalls,
+                    p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                    0f, false, false,
+                    floatArrayOf(1f, 0f, 1f), intArrayOf(1, -1),
+                )
+                var remainingRe = countsRe[1]
+                while (remainingRe > 0) {
+                    remainingRe = LlamaNative.nativePrefillStep()
+                }
+                val repreMs = (System.nanoTime() - tReprefill0) / 1_000_000
+
+                StateMeasureResult(
+                    tokens = tokens,
+                    fileSizeBytes = bytes,
+                    saveTimeMs = saveMs,
+                    loadTimeMs = loadMs,
+                    repreTimeMs = repreMs,
+                )
+            } finally {
+                if (stateFile.exists()) stateFile.delete()
+                LlamaNative.nativeResetCache()
+            }
+        }
+    }
+
+    private fun buildMeasurementPrompt(targetTokens: Int): List<ChatMessage> {
+        val block = "The quick brown fox jumps over the lazy dog. A slow red turtle crawls beneath the sunny sky. "
+        val reps = maxOf(1, targetTokens / 20)
+        val text = buildString(reps * block.length) {
+            repeat(reps) { append(block) }
+        }
+        return listOf(ChatMessage(Role.USER, text))
     }
 
     /** One bench reply's speeds and battery use; [note] says why the model could not run there. */

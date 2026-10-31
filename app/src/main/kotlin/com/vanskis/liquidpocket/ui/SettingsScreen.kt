@@ -1,5 +1,8 @@
 package com.vanskis.liquidpocket.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -39,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -76,10 +81,13 @@ fun SettingsScreen(
     onOpenMemory: () -> Unit,
     vm: SettingsViewModel = viewModel(),
 ) {
+    val context = LocalContext.current
     val settings by vm.settings.collectAsStateWithLifecycle()
     val engineState by vm.engineState.collectAsStateWithLifecycle()
     val benchmarking by vm.benchmarking.collectAsStateWithLifecycle()
     val benchmark by vm.benchmark.collectAsStateWithLifecycle()
+    val measuring by vm.measuring.collectAsStateWithLifecycle()
+    val measurement by vm.measurement.collectAsStateWithLifecycle()
     val omniInstalled by vm.omniInstalled.collectAsStateWithLifecycle()
     val lookup by vm.lookup.collectAsStateWithLifecycle()
     val importing by vm.importing.collectAsStateWithLifecycle()
@@ -321,18 +329,43 @@ fun SettingsScreen(
             ) {
                 OutlinedButton(
                     onClick = vm::runBenchmark,
-                    enabled = !benchmarking && engineState != EngineState.Generating,
+                    enabled = !benchmarking && !measuring && engineState != EngineState.Generating,
                 ) { Text("Run benchmark") }
-                if (benchmarking) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                OutlinedButton(
+                    onClick = vm::runMeasure,
+                    enabled = !benchmarking && !measuring && engineState != EngineState.Generating,
+                ) { Text("Measure") }
+                if (benchmarking || measuring) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
             }
-            Text(
-                if (benchmarking) {
-                    "Running…"
-                } else {
-                    benchmark ?: "Speed and battery use of the loaded model on the CPU and, in builds that have it, the NPU. The NPU is kept on only where it wins."
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
+            if (benchmarking) {
+                Text("Running benchmark…", style = MaterialTheme.typography.bodySmall)
+            } else if (measuring) {
+                Text("Measuring…", style = MaterialTheme.typography.bodySmall)
+            } else {
+                benchmark?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                if (benchmark == null && measurement == null) {
+                    Text(
+                        "Speed and battery use of the loaded model on the CPU and, in builds that have it, the NPU. The NPU is kept on only where it wins.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            measurement?.let { text ->
+                Row(
+                    modifier = Modifier.padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Measurement results", style = MaterialTheme.typography.titleSmall)
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Liquid Pocket Measurements", text))
+                    }) { Text("Copy") }
+                }
+                SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodySmall)
+                }
+            }
 
             OutlinedButton(onClick = onOpenMemory, modifier = Modifier.padding(top = 24.dp)) { Text("Things to remember") }
             Text(

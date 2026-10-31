@@ -143,4 +143,19 @@ internal object LlamaNative {
      * named. Null when the loaded model was not traced.
      */
     external fun nativeAcceleratorReport(): String?
+
+    /** Loads an extra model's weights on the CPU alongside the chat model for memory measurement. */
+    external fun nativeLoadExtraModel(path: String): Boolean
+
+    /** Frees the extra model loaded by [nativeLoadExtraModel]. */
+    external fun nativeFreeExtraModel()
+
+    /** Saves sequence 0 state to [filepath]. Returns bytes written. */
+    external fun nativeSaveState(filepath: String): Long
+
+    /** Loads sequence 0 state from [filepath]. Returns token count restored. */
+    external fun nativeLoadState(filepath: String): Int
+
+    /** Clears sequence 0 memory cache and resets pending units. */
+    external fun nativeResetCache()
 }
