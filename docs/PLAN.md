@@ -124,3 +124,33 @@ v81 output reports, conv layers likely on CPU); DuckDuckGo lite is unofficial an
   It runs once quietly after the first model load, and again on Run benchmark; the switch stays as
   a manual override.
 - **Math rendering:** \[...\] and \(...\) render like $$...$$ and $...$.
+
+## v7: faster and sturdier with the models as they are (decided 2026-10-31)
+
+No change to the models: no training, adapters or merging. Each item lands as its own commit with
+its own tests, in this order. Items 1, 2 and 4 come first; measure before building 1 and 2.
+
+0. **Measure first.** On the phone: memory with LFM3-1.7B and Omni both loaded; time to restore a
+   saved 8K and 32K chat state against re-reading it; time to first token today. Record the numbers
+   here before starting 1 and 2.
+1. **Both models loaded.** Keep LFM3-1.7B and Omni resident so photo and voice turns need no swap.
+   Falls back to swapping when memory is short (low-memory signal, or a failed second load).
+2. **Saved chat state.** Save each chat's KV cache to a file (`llama_state_seq_save_file`) after a
+   reply and restore it when the chat reopens or its model comes back, instead of re-prefilling.
+   Files are tied to the model file and quant and deleted when either changes, when the chat is
+   deleted, or past a size cap.
+3. **Shared prompt prefix.** The system prompt and tool list are cached once and reused across chats
+   and turns.
+4. **Strict tool calls.** Tool-call arguments are always generated under the grammar built from the
+   offered tools' schemas, so a malformed call cannot be produced. Thinking, answer and tool calls
+   come from llama.cpp's chat parser as separate parts instead of marker scanning, where the
+   template supports it; marker scanning stays as the fallback.
+5. **Engine in its own process.** A native crash restarts the engine only; the chat screen stays.
+6. **Lookup decoding.** n-gram (prompt lookup) speculative decoding, which needs no draft model; on
+   only where it measures faster.
+7. **Per-phase accelerator.** Prompt reading and decoding each run on the CPU or NPU, whichever the
+   benchmark found faster, backing off to the CPU when the phone is hot.
+8. **Turn recorder and replay.** Each turn's prompt tokens, sampling, seed, tool results and timings
+   are recorded; recorded turns replay deterministically as tests and benchmarks.
+9. **Local full build.** A container with the Android SDK, NDK and Hexagon toolchain so the whole
+   app builds and tests locally, not only in CI.
