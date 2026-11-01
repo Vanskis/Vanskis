@@ -150,6 +150,8 @@ its own tests, in this order. Items 1, 2 and 4 come first; measure before buildi
    reply and restore it when the chat reopens or its model comes back, instead of re-prefilling.
    Files are tied to the model file and quant and deleted when either changes, when the chat is
    deleted, or past a size cap.
+   **Done (62660fb):** KV cache saved to file after reply, restored on reopen/return, capped at 512 MB LRU.
+   **Hit fix (52c012d):** sync cached text with template-rendered conversation; decode closing tokens if prefix matches; abort save if tokens mismatch; report fastPath and reReadTokens in stats.
 3. **Shared prompt prefix.** The system prompt and tool list are cached once and reused across chats
    and turns.
 4. **Strict tool calls.** Tool-call arguments are always generated under the grammar built from the

@@ -92,6 +92,12 @@ interface Engine {
      * Returns tokens restored, or 0 on failure.
      */
     suspend fun loadState(file: java.io.File): Int = 0
+
+    /**
+     * Synchronizes sequence 0 cached text with the template-rendered conversation so far.
+     * Returns true if cache was synced; false if cached tokens mismatch (state should not be saved).
+     */
+    suspend fun syncCache(messages: List<ChatMessage>, params: GenerationParams = GenerationParams()): Boolean = false
 }
 
 /** Where the model's layers run. */
@@ -287,6 +293,10 @@ data class GenerationStats(
     val timeToFirstTokenMs: Long? = null,
     /** The reply stopped because it hit [GenerationParams.maxNewTokens] or the context filled, not at its end. */
     val cutOff: Boolean = false,
+    /** Whether prompt prefilling took the cached-text fast path without re-reading prefix tokens. */
+    val fastPath: Boolean = false,
+    /** Tokens from a previous turn that had to be re-read because prefix matching missed. */
+    val reReadTokens: Int = 0,
 )
 
 sealed interface EngineState {

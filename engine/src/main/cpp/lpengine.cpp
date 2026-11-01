@@ -550,7 +550,7 @@ bitmaps make_bitmaps(JNIEnv * env, const prompt_args & a) {
 // `think` is the template's enable_thinking (ignored by templates without thinking). With a
 // projector loaded, a user turn gets one media marker per media item before its text. Throws
 // std::exception on template errors.
-common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers, bool think) {
+common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers, bool think, bool add_generation_prompt = true) {
     const auto roles = jints_to_std(env, a.roles);
     const auto contents = jbytes_array_to_std(env, a.contents);
     const auto tool_names = jbytes_array_to_std(env, a.tool_names);
@@ -563,7 +563,7 @@ common_chat_params render(JNIEnv * env, const prompt_args & a, bool with_markers
 
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
-    inputs.add_generation_prompt = true;
+    inputs.add_generation_prompt = add_generation_prompt;
     inputs.enable_thinking = think;
     // Lets the template's parser take the think block apart from the content.
     inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
@@ -1030,13 +1030,18 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
         return nullptr;
     }
     const std::string full_text = params.prompt.str();
+    bool fast_path = false;
+    size_t re_read_tokens = 0;
+    const size_t prev_cached_tokens = g_n_tokens;
 
     // Fast path: a text-only prompt that extends the text already in memory (the usual next turn).
     if (!has_media && g_cached_text_valid && !g_cached.empty() && full_text.size() > g_cached_text.size() &&
         full_text.compare(0, g_cached_text.size(), g_cached_text) == 0) {
         g_pending = text_units(tokenize_from(params.prompt, g_cached_text.size()));
+        fast_path = true;
     }
     if (g_pending.empty()) {
+        fast_path = false;
         // Unit path: keep the longest common prefix of whole units (a media chunk matches only as a
         // whole, by content hash), and decode at least one unit for logits.
         const std::vector<unit> full =
@@ -1059,6 +1064,9 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
             g_cached.resize(keep);
             g_n_past = keep_pos;
             g_n_tokens = keep_tokens;
+        }
+        if (prev_cached_tokens > g_n_tokens) {
+            re_read_tokens = prev_cached_tokens - g_n_tokens;
         }
         g_pending.assign(full.begin() + static_cast<std::ptrdiff_t>(keep), full.end());
     }
@@ -1141,9 +1149,14 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeBeginReply(
     g_sampler = common_sampler_init(g_model, sparams);
     if (g_sampler == nullptr) { reset_pending(); reset_speech(); throw_java(env, "Could not create the sampler"); return nullptr; }
 
-    jint result[2] = { static_cast<jint>(prompt_tokens), static_cast<jint>(g_pending_tokens + header_tokens) };
-    jintArray out = env->NewIntArray(2);
-    if (out != nullptr) env->SetIntArrayRegion(out, 0, 2, result);
+    jint result[4] = {
+        static_cast<jint>(prompt_tokens),
+        static_cast<jint>(g_pending_tokens + header_tokens),
+        fast_path ? 1 : 0,
+        static_cast<jint>(re_read_tokens)
+    };
+    jintArray out = env->NewIntArray(4);
+    if (out != nullptr) env->SetIntArrayRegion(out, 0, 4, result);
     return out;
 }
 
@@ -1418,6 +1431,77 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeFreeExtraModel(JNIEnv * /
     if (g_extra_model != nullptr) {
         llama_model_free(g_extra_model);
         g_extra_model = nullptr;
+    }
+}
+
+// Synchronizes g_cached_text with the chat template's rendering of the conversation so far (without
+// adding a generation prompt). If the cached token sequence matches the rendered prefix, decodes
+// any missing closing tokens (e.g. EOS or trailing newline) into the cache and updates g_cached_text.
+// If the tokens do not match, marks g_cached_text_valid = false and returns JNI_FALSE so state is not saved.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeSyncCache(
+        JNIEnv * env, jobject /*thiz*/, jintArray roles, jobjectArray contents,
+        jobjectArray tool_names, jobjectArray tool_calls, jintArray media_msg,
+        jintArray media_kind, jintArray media_dims, jobjectArray media_data,
+        jobjectArray tools, jboolean jthink) {
+    if (g_ctx == nullptr || g_cached.empty()) {
+        g_cached_text_valid = false;
+        return JNI_FALSE;
+    }
+    if (media_msg != nullptr && env->GetArrayLength(media_msg) > 0) {
+        g_cached_text_valid = false;
+        return JNI_FALSE;
+    }
+
+    try {
+        const prompt_args a { roles, contents, tool_names, tool_calls, media_msg, media_kind, media_dims, media_data, tools };
+        const auto params = render(env, a, /* with_markers */ false, jthink == JNI_TRUE, /* add_generation_prompt */ false);
+        const std::string rendered_text = params.prompt.str();
+        const auto rendered_tokens = tokenize_from(params.prompt, 0);
+
+        if (g_cached.size() > rendered_tokens.size()) {
+            g_cached_text_valid = false;
+            return JNI_FALSE;
+        }
+
+        // Verify cached tokens match the rendered tokens prefix
+        for (size_t i = 0; i < g_cached.size(); ++i) {
+            if (g_cached[i].token == LLAMA_TOKEN_NULL || g_cached[i].token != rendered_tokens[i]) {
+                g_cached_text_valid = false;
+                return JNI_FALSE;
+            }
+        }
+
+        // Decode any trailing template tokens (such as EOS and newline) into the KV cache
+        if (g_cached.size() < rendered_tokens.size()) {
+            const size_t extra = rendered_tokens.size() - g_cached.size();
+            if (g_n_tokens + extra >= static_cast<size_t>(g_n_ctx)) {
+                g_cached_text_valid = false;
+                return JNI_FALSE;
+            }
+            for (size_t i = g_cached.size(); i < rendered_tokens.size(); ++i) {
+                const llama_token token = rendered_tokens[i];
+                g_batch.clear();
+                g_batch.add(token, g_n_past, 0, true);
+                const int32_t rc = llama_process(g_ctx, LLAMA_PROCESS_TYPE_DECODE, g_batch.get());
+                if (rc != 0) {
+                    reset_cache();
+                    g_cached_text_valid = false;
+                    return JNI_FALSE;
+                }
+                unit u;
+                u.token = token;
+                cache_push(u);
+            }
+        }
+
+        g_cached_text = rendered_text;
+        g_cached_text_valid = true;
+        return JNI_TRUE;
+    } catch (const std::exception & e) {
+        LOGw("nativeSyncCache failed: %s", e.what());
+        g_cached_text_valid = false;
+        return JNI_FALSE;
     }
 }
 

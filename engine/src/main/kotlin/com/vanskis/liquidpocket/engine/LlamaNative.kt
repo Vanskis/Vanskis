@@ -150,6 +150,23 @@ internal object LlamaNative {
     /** Frees the extra model loaded by [nativeLoadExtraModel]. */
     external fun nativeFreeExtraModel()
 
+    /**
+     * Synchronizes sequence 0 cached text with the template-rendered conversation so far.
+     * Decodes closing tokens if the prefix matches. Returns true on success, false if tokens mismatch.
+     */
+    external fun nativeSyncCache(
+        roles: IntArray,
+        contents: Array<ByteArray>,
+        toolNames: Array<ByteArray>,
+        toolCalls: Array<Array<ByteArray>>,
+        mediaMsg: IntArray,
+        mediaKind: IntArray,
+        mediaDims: IntArray,
+        mediaData: Array<Any?>,
+        tools: Array<ByteArray>,
+        think: Boolean,
+    ): Boolean
+
     /** Saves sequence 0 state to [filepath]. Returns bytes written. */
     external fun nativeSaveState(filepath: String): Long
 

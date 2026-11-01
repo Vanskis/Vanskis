@@ -182,6 +182,22 @@ internal class LlamaEngine(
         }
     }
 
+    override suspend fun syncCache(messages: List<ChatMessage>, params: GenerationParams): Boolean = mutex.withLock {
+        withContext(dispatcher) {
+            if (loaded == null) return@withContext false
+            val p = NativePrompt.of(messages, params.tools)
+            try {
+                LlamaNative.nativeSyncCache(
+                    p.roles, p.contents, p.toolNames, p.toolCalls,
+                    p.mediaMsg, p.mediaKind, p.mediaDims, p.mediaData, p.tools,
+                    params.think,
+                )
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     override suspend fun benchmark(chargeMicroAh: () -> Long?): BenchResult {
         val (start, config) = current() ?: throw EngineException("No model loaded")
         val statsBefore = _lastStats.value
@@ -475,6 +491,8 @@ internal class LlamaEngine(
             var firstTokenMs: Long? = null
             var decodeNanos = 0L
             var failure: EngineException? = null
+            var fastPathHit = false
+            var reReadCount = 0
             try {
                 val budget = ContextBudget.of(ready.contextSize, minOf(params.maxNewTokens, GenerationParams.REPLY_ROOM))
                 val trimmed = ConversationTrimmer.trim(messages, budget) { msgs ->
@@ -512,6 +530,8 @@ internal class LlamaEngine(
                 }
                 promptTokens = counts[0]
                 prefillTokens = counts[1]
+                fastPathHit = if (counts.size >= 3) counts[2] != 0 else false
+                reReadCount = if (counts.size >= 4) counts[3] else 0
 
                 var remaining = prefillTokens
                 while (remaining > 0) {
@@ -598,6 +618,8 @@ internal class LlamaEngine(
                         thinkingTokens = thinkingTokens,
                         cutOff = cutOff,
                         timeToFirstTokenMs = firstTokenMs,
+                        fastPath = fastPathHit,
+                        reReadTokens = reReadCount,
                     )
                 }
                 if (failure == null) _state.value = loaded ?: EngineState.Idle

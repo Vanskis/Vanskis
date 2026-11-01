@@ -421,8 +421,13 @@ class ChatController(
                 if (!stopRequested && conversationId != null) {
                     val saveId = conversationId!!
                     ModelStateKey.from(engine.state.value)?.let { key ->
-                        if (savedState?.save(saveId, key) == true) {
-                            activeStateConversationId = saveId
+                        val history = history(system, params)
+                        if (engine.syncCache(history, offered(params).copy(speak = false))) {
+                            if (savedState?.save(saveId, key) == true) {
+                                activeStateConversationId = saveId
+                            }
+                        } else {
+                            savedState?.delete(saveId)
                         }
                     }
                 }
