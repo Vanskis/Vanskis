@@ -152,6 +152,8 @@ its own tests, in this order. Items 1, 2 and 4 come first; measure before buildi
    deleted, or past a size cap.
    **Done (62660fb):** KV cache saved to file after reply, restored on reopen/return, capped at 512 MB LRU.
    **Hit fix (52c012d):** sync cached text with template-rendered conversation; decode closing tokens if prefix matches; abort save if tokens mismatch; report fastPath and reReadTokens in stats.
+A. **Diagnostics screen.** Settings -> Diagnostics screen with "Run all" button and report copy.
+   **Done (44b67e1):** Diagnostics screen and runner checking sampling determinism, custom model, 32K state, fast-path cache hit, and extensible subsystem checks.
 3. **Shared prompt prefix.** The system prompt and tool list are cached once and reused across chats
    and turns.
 4. **Strict tool calls.** Tool-call arguments are always generated under the grammar built from the

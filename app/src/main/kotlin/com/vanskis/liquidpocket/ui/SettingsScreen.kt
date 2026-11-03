@@ -79,6 +79,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onManageModel: () -> Unit,
     onOpenMemory: () -> Unit,
+    onOpenDiagnostics: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -403,6 +404,12 @@ fun SettingsScreen(
             )
 
             OutlinedButton(onClick = onManageModel, modifier = Modifier.padding(top = 24.dp)) { Text("Manage model") }
+
+            OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.padding(top = 24.dp)) { Text("Diagnostics") }
+            Text(
+                "Run test suite verifying sampling, saved state, and runtime subsystems.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

@@ -23,6 +23,7 @@ import com.vanskis.liquidpocket.access.SharedDocuments
 import com.vanskis.liquidpocket.chat.ChatViewModel
 import com.vanskis.liquidpocket.settings.AppTheme
 import com.vanskis.liquidpocket.ui.ChatScreen
+import com.vanskis.liquidpocket.ui.DiagnosticsScreen
 import com.vanskis.liquidpocket.ui.LiquidPocketTheme
 import com.vanskis.liquidpocket.ui.MemoryScreen
 import com.vanskis.liquidpocket.ui.SettingsScreen
@@ -32,7 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Screen { SETUP, CHAT, SETTINGS, MEMORY }
+enum class Screen { SETUP, CHAT, SETTINGS, MEMORY, DIAGNOSTICS }
 
 class MainActivity : ComponentActivity() {
     /** The same instance the Chat screen gets from viewModel(). */
@@ -101,7 +102,9 @@ private fun LiquidPocketRoot(start: Screen, launches: Int) {
             onBack = { screen = Screen.CHAT },
             onManageModel = { screen = Screen.SETUP },
             onOpenMemory = { screen = Screen.MEMORY },
+            onOpenDiagnostics = { screen = Screen.DIAGNOSTICS },
         )
         Screen.MEMORY -> MemoryScreen(onBack = { screen = Screen.SETTINGS })
+        Screen.DIAGNOSTICS -> DiagnosticsScreen(onBack = { screen = Screen.SETTINGS })
     }
 }
