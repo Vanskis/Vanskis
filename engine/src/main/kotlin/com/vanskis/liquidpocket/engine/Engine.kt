@@ -98,6 +98,21 @@ interface Engine {
      * Returns true if cache was synced; false if cached tokens mismatch (state should not be saved).
      */
     suspend fun syncCache(messages: List<ChatMessage>, params: GenerationParams = GenerationParams()): Boolean = false
+
+    /** Whether an extra model is currently loaded in memory alongside the primary model. */
+    val hasExtraModel: Boolean get() = false
+
+    /**
+     * Loads [modelPath] as a resident extra model if not already loaded, keeping it ready for fast swaps.
+     * Returns true on success; false on failure.
+     */
+    suspend fun loadExtraModel(modelPath: String): Boolean = false
+
+    /**
+     * Frees any extra model kept resident in memory.
+     * Returns true if an extra model was resident and freed; false if none was resident.
+     */
+    suspend fun freeExtraModel(): Boolean = false
 }
 
 /** Where the model's layers run. */

@@ -1,6 +1,9 @@
 package com.vanskis.liquidpocket
 
+import android.app.Activity
 import android.app.Application
+import android.content.ComponentCallbacks2
+import android.os.Bundle
 import com.vanskis.liquidpocket.access.SharedDocuments
 import com.vanskis.liquidpocket.chat.CachingMediaLoader
 import com.vanskis.liquidpocket.chat.MediaLoader
@@ -52,6 +55,17 @@ class LiquidPocketApp : Application() {
     /** Decoded photos and clips for the engine, cached because every reply resends the whole history. */
     val media: MediaLoader by lazy { CachingMediaLoader(AndroidMediaLoader()) }
 
+    private var startedActivities = 0
+
+    fun preloadOmniIfInstalled() {
+        appScope.launch {
+            val omni = installer.installedFile(MEDIA_MODEL)
+            if (omni != null && omni.exists() && !engine.hasExtraModel) {
+                engine.loadExtraModel(omni.absolutePath)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // Frees the retired model's few GB; once it is gone this is one missing-file check.
@@ -62,6 +76,40 @@ class LiquidPocketApp : Application() {
         appScope.launch {
             if (engine.npuCrashedLastRun && settings.settings.first().useNpu) settings.setUseNpu(false)
             npuPick.firstRun()
+        }
+
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivities++
+                if (startedActivities == 1) {
+                    preloadOmniIfInstalled()
+                }
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivities--
+                if (startedActivities <= 0) {
+                    startedActivities = 0
+                    appScope.launch {
+                        engine.freeExtraModel()
+                    }
+                }
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            appScope.launch {
+                engine.freeExtraModel()
+            }
         }
     }
 }

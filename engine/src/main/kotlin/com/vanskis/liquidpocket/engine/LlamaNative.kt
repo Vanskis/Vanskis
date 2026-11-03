@@ -144,11 +144,14 @@ internal object LlamaNative {
      */
     external fun nativeAcceleratorReport(): String?
 
-    /** Loads an extra model's weights on the CPU alongside the chat model for memory measurement. */
+    /** Loads an extra model's weights on the CPU alongside the chat model for memory measurement or residency. */
     external fun nativeLoadExtraModel(path: String): Boolean
 
     /** Frees the extra model loaded by [nativeLoadExtraModel]. */
     external fun nativeFreeExtraModel()
+
+    /** Whether an extra model is currently loaded in memory. */
+    external fun nativeHasExtraModel(): Boolean
 
     /**
      * Synchronizes sequence 0 cached text with the template-rendered conversation so far.

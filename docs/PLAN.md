@@ -146,6 +146,7 @@ its own tests, in this order. Items 1, 2 and 4 come first; measure before buildi
    in, a swap back to the chat model costs about 1 s of loading instead of re-reading the chat.
 1. **Both models loaded.** Keep LFM3-1.7B and Omni resident so photo and voice turns need no swap.
    Falls back to swapping when memory is short (low-memory signal, or a failed second load).
+   **Done (7811b8f):** Keep models resident in memory for instant pointer swapping, free on ON_STOP and TRIM_MEMORY_RUNNING_LOW, fallback to swapping on OOM, and verify in Diagnostics.
 2. **Saved chat state.** Save each chat's KV cache to a file (`llama_state_seq_save_file`) after a
    reply and restore it when the chat reopens or its model comes back, instead of re-prefilling.
    Files are tied to the model file and quant and deleted when either changes, when the chat is

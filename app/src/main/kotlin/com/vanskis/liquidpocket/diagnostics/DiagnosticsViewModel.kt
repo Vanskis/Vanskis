@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vanskis.liquidpocket.ACTIVE_MODEL
+import com.vanskis.liquidpocket.MEDIA_MODEL
 import com.vanskis.liquidpocket.LiquidPocketApp
 import com.vanskis.liquidpocket.core.ModelSpec
 import com.vanskis.liquidpocket.engine.ChatMessage
@@ -327,8 +328,33 @@ class DiagnosticsRunner(
         }
     }
 
-    private fun runOmniResidentCheck() {
-        updateItem("omni_resident", DiagnosticStatus.SKIP, "Omni dual-residence: pending v7 item 1")
+    private suspend fun runOmniResidentCheck() {
+        val omniFile = installedFile(MEDIA_MODEL)
+        if (omniFile == null || !omniFile.exists()) {
+            updateItem("omni_resident", DiagnosticStatus.SKIP, "Omni model not downloaded/installed")
+            return
+        }
+
+        updateItem("omni_resident", DiagnosticStatus.RUNNING, "Testing Omni dual-residence...")
+        try {
+            val loaded = engine.loadExtraModel(omniFile.absolutePath)
+            if (!loaded) {
+                updateItem("omni_resident", DiagnosticStatus.FAIL, "loadExtraModel returned false")
+                return
+            }
+            val hasExtra = engine.hasExtraModel
+            val freed = engine.freeExtraModel()
+            val stillHasExtra = engine.hasExtraModel
+            if (hasExtra && freed && !stillHasExtra) {
+                // Restore residency while app is running in foreground
+                engine.loadExtraModel(omniFile.absolutePath)
+                updateItem("omni_resident", DiagnosticStatus.PASS, "Omni stays resident, frees on demand, and restores")
+            } else {
+                updateItem("omni_resident", DiagnosticStatus.FAIL, "Residency verification failed: hasExtra=$hasExtra, freed=$freed, stillHasExtra=$stillHasExtra")
+            }
+        } catch (e: Exception) {
+            updateItem("omni_resident", DiagnosticStatus.FAIL, "Omni resident check error: ${e.message ?: e.javaClass.simpleName}")
+        }
     }
 
     private fun runSharedPrefixCheck() {

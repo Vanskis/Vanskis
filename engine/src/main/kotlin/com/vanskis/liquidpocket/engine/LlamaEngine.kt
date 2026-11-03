@@ -198,6 +198,36 @@ internal class LlamaEngine(
         }
     }
 
+    override val hasExtraModel: Boolean
+        get() = LlamaNative.nativeHasExtraModel()
+
+    override suspend fun loadExtraModel(modelPath: String): Boolean = mutex.withLock {
+        withContext(dispatcher) {
+            try {
+                if (!nativeReady) {
+                    System.loadLibrary("lpengine")
+                    LlamaNative.nativeInit(nativeLibDir)
+                    nativeReady = true
+                }
+                requireReadable(modelPath, "Extra model")
+                LlamaNative.nativeLoadExtraModel(modelPath)
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    override suspend fun freeExtraModel(): Boolean = mutex.withLock {
+        withContext(dispatcher) {
+            if (LlamaNative.nativeHasExtraModel()) {
+                LlamaNative.nativeFreeExtraModel()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
     override suspend fun benchmark(chargeMicroAh: () -> Long?): BenchResult {
         val (start, config) = current() ?: throw EngineException("No model loaded")
         val statsBefore = _lastStats.value

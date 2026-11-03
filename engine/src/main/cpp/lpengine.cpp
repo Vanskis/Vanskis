@@ -245,6 +245,8 @@ bool count_op(struct ggml_tensor * t, bool ask, void * /*user*/) {
 
 llama_model * g_model = nullptr;
 llama_model * g_extra_model = nullptr;
+std::string g_model_path;
+std::string g_extra_model_path;
 llama_context * g_ctx = nullptr;
 const llama_vocab * g_vocab = nullptr;
 mtmd_context * g_mtmd = nullptr;
@@ -466,7 +468,7 @@ std::string speak_piece(llama_token tok) {
     return p || !llama_vocab_is_control(g_vocab, tok) ? common_token_to_piece(g_ctx, tok, p) : "";
 }
 
-void free_all() {
+void free_context() {
     reset_cache();
     reset_speech();
     g_gen.ctx.reset();
@@ -477,10 +479,16 @@ void free_all() {
     g_batch = common_batch();
     if (g_mtmd != nullptr) { mtmd_free(g_mtmd); g_mtmd = nullptr; }
     if (g_ctx != nullptr) { llama_free(g_ctx); g_ctx = nullptr; }
-    if (g_extra_model != nullptr) { llama_model_free(g_extra_model); g_extra_model = nullptr; }
-    if (g_model != nullptr) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
     g_n_ctx = 0;
+}
+
+void free_all() {
+    free_context();
+    if (g_extra_model != nullptr) { llama_model_free(g_extra_model); g_extra_model = nullptr; }
+    if (g_model != nullptr) { llama_model_free(g_model); g_model = nullptr; }
+    g_model_path.clear();
+    g_extra_model_path.clear();
 }
 
 // The conversation as passed from LlamaNative.kt.
@@ -790,7 +798,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobject /*thiz*/, jstring jpath,
                                                            jstring jmmproj, jint jn_ctx, jint jn_threads,
                                                            jboolean jnpu) {
-    free_all();
+    free_context();
     const std::string path = jstring_to_std(env, jpath);
     const bool npu = jnpu == JNI_TRUE;
     {
@@ -806,39 +814,70 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
         return 0;
     }
 
-    // The defaults offload every layer (n_gpu_layers = -1) to every registered GPU-type device,
-    // which would put a CPU-mode model on the NPU once its backend is loaded. So the device list is
-    // always explicit: the NPU devices for the NPU, none (CPU only, as llama's `--device none`) and
-    // no offloaded layers for the CPU.
-    llama_model_params mparams = llama_model_default_params();
-    std::vector<ggml_backend_dev_t> devices;
-    if (npu) {
-        for (size_t i = 0; i < ggml_backend_reg_dev_count(g_npu_reg); ++i) {
-            devices.push_back(ggml_backend_reg_dev_get(g_npu_reg, i));
+    bool reused = false;
+    if (g_model != nullptr && g_model_path == path) {
+        reused = true;
+    } else if (g_extra_model != nullptr && g_extra_model_path == path) {
+        std::swap(g_model, g_extra_model);
+        std::swap(g_model_path, g_extra_model_path);
+        reused = true;
+    }
+
+    if (!reused) {
+        if (g_model != nullptr) {
+            if (g_extra_model != nullptr) {
+                llama_model_free(g_extra_model);
+                g_extra_model = nullptr;
+                g_extra_model_path.clear();
+            }
+            g_extra_model = g_model;
+            g_extra_model_path = g_model_path;
+            g_model = nullptr;
+            g_model_path.clear();
         }
-        mparams.n_gpu_layers = -1;
-    } else {
-        mparams.n_gpu_layers = 0;
-    }
-    devices.push_back(nullptr);
-    mparams.devices = devices.data();
-    try {
-        g_model = llama_model_load_from_file(path.c_str(), mparams);
-    } catch (const std::exception & e) {
-        g_model = nullptr;
-        throw_java(env, std::string("Could not load model: ") + e.what());
-        return 0;
-    }
-    if (g_model == nullptr) {
-        // llama_model_load catches the NPU backend's errors (the DSP refusing the session, rpcmem or
-        // fastrpc_mmap failures) and only logs them, so on the NPU a null model is most likely the
-        // NPU's doing: say so, and LlamaEngine retries on the CPU, which reports a bad file itself.
+
+        llama_model_params mparams = llama_model_default_params();
+        std::vector<ggml_backend_dev_t> devices;
         if (npu) {
-            throw_java(env, "The NPU could not load the model (the DSP refused it or ran out of memory; see the log)");
+            for (size_t i = 0; i < ggml_backend_reg_dev_count(g_npu_reg); ++i) {
+                devices.push_back(ggml_backend_reg_dev_get(g_npu_reg, i));
+            }
+            mparams.n_gpu_layers = -1;
         } else {
-            throw_java(env, "Could not load model (unsupported or corrupt GGUF?): " + path);
+            mparams.n_gpu_layers = 0;
         }
-        return 0;
+        devices.push_back(nullptr);
+        mparams.devices = devices.data();
+        try {
+            g_model = llama_model_load_from_file(path.c_str(), mparams);
+        } catch (const std::exception & e) {
+            g_model = nullptr;
+        }
+
+        if (g_model == nullptr && g_extra_model != nullptr) {
+            // Free resident extra model and retry (fallback to swapping)
+            LOGw("Could not load %s alongside extra model; freeing extra model to fallback to swapping", path.c_str());
+            llama_model_free(g_extra_model);
+            g_extra_model = nullptr;
+            g_extra_model_path.clear();
+            try {
+                g_model = llama_model_load_from_file(path.c_str(), mparams);
+            } catch (const std::exception & e) {
+                g_model = nullptr;
+                throw_java(env, std::string("Could not load model: ") + e.what());
+                return 0;
+            }
+        }
+
+        if (g_model == nullptr) {
+            if (npu) {
+                throw_java(env, "The NPU could not load the model (the DSP refused it or ran out of memory; see the log)");
+            } else {
+                throw_java(env, "Could not load model (unsupported or corrupt GGUF?): " + path);
+            }
+            return 0;
+        }
+        g_model_path = path;
     }
     g_vocab = llama_model_get_vocab(g_model);
 
@@ -858,9 +897,20 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoad(JNIEnv * env, jobjec
         g_ctx = llama_init_from_model(g_model, cparams);
     } catch (const std::exception & e) {
         g_ctx = nullptr;
-        free_all();
-        throw_java(env, std::string("Could not create a llama context: ") + e.what());
-        return 0;
+    }
+    if (g_ctx == nullptr && g_extra_model != nullptr) {
+        LOGw("Could not init context alongside extra model; freeing extra model to fallback to swapping");
+        llama_model_free(g_extra_model);
+        g_extra_model = nullptr;
+        g_extra_model_path.clear();
+        try {
+            g_ctx = llama_init_from_model(g_model, cparams);
+        } catch (const std::exception & e) {
+            g_ctx = nullptr;
+            free_all();
+            throw_java(env, std::string("Could not create a llama context: ") + e.what());
+            return 0;
+        }
     }
     if (g_ctx == nullptr) {
         free_all();
@@ -1405,14 +1455,21 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeParseReply(JNIEnv * env, 
     return to_jbytes_array(env, out);
 }
 
-// Loads an extra model (CPU weights only) alongside the chat model for memory measurement.
+// Loads an extra model (CPU weights only) alongside the chat model for memory measurement or residency.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadExtraModel(JNIEnv * env, jobject /*thiz*/, jstring jpath) {
+    const std::string path = jstring_to_std(env, jpath);
+    if (g_extra_model != nullptr && g_extra_model_path == path) {
+        return JNI_TRUE;
+    }
+    if (g_model != nullptr && g_model_path == path) {
+        return JNI_TRUE;
+    }
     if (g_extra_model != nullptr) {
         llama_model_free(g_extra_model);
         g_extra_model = nullptr;
+        g_extra_model_path.clear();
     }
-    const std::string path = jstring_to_std(env, jpath);
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
     // Read the weights into memory: a memory-mapped model is not counted until its pages are touched.
@@ -1422,16 +1479,26 @@ Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeLoadExtraModel(JNIEnv * e
     } catch (...) {
         g_extra_model = nullptr;
     }
+    if (g_extra_model != nullptr) {
+        g_extra_model_path = path;
+    }
     return g_extra_model != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 
-// Frees the extra model loaded by nativeLoadExtraModel.
+// Frees the extra model.
 extern "C" JNIEXPORT void JNICALL
 Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeFreeExtraModel(JNIEnv * /*env*/, jobject /*thiz*/) {
     if (g_extra_model != nullptr) {
         llama_model_free(g_extra_model);
         g_extra_model = nullptr;
+        g_extra_model_path.clear();
     }
+}
+
+// Returns whether an extra model is currently loaded in memory.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vanskis_liquidpocket_engine_LlamaNative_nativeHasExtraModel(JNIEnv * /*env*/, jobject /*thiz*/) {
+    return g_extra_model != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 
 // Synchronizes g_cached_text with the chat template's rendering of the conversation so far (without

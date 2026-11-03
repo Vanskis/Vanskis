@@ -44,6 +44,27 @@ class DiagnosticsRunnerTest {
         var loadTokens = 100
         var fastPath = true
         var reReadTokens = 0
+        var extraModelLoaded = false
+        var loadExtraModelResult = true
+
+        override val hasExtraModel: Boolean
+            get() = extraModelLoaded
+
+        override suspend fun loadExtraModel(modelPath: String): Boolean {
+            if (loadExtraModelResult) {
+                extraModelLoaded = true
+                return true
+            }
+            return false
+        }
+
+        override suspend fun freeExtraModel(): Boolean {
+            if (extraModelLoaded) {
+                extraModelLoaded = false
+                return true
+            }
+            return false
+        }
 
         override suspend fun load(modelPath: String, config: EngineConfig) {
             state.value = EngineState.Ready(modelPath, config.contextSize)
@@ -182,5 +203,51 @@ class DiagnosticsRunnerTest {
         val itemsById = runner.items.value.associateBy { it.id }
         assertEquals(DiagnosticStatus.PASS, itemsById["saved_state_32k"]?.status)
         assertTrue(itemsById["saved_state_32k"]?.detail?.contains("32K state saved") == true)
+    }
+
+    @Test
+    fun runAllOmniResidentPassesWhenInstalled() = runTest {
+        val engine = FakeEngine()
+        val omniFile = tempFolder.newFile("omni.gguf")
+
+        val runner = DiagnosticsRunner(
+            engine = engine,
+            getSettings = { AppSettings() },
+            installedFile = { spec -> if (spec == com.vanskis.liquidpocket.MEDIA_MODEL) omniFile else null },
+            cacheDir = tempFolder.newFolder(),
+            scope = this,
+            ioDispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        runner.runAll()
+        advanceUntilIdle()
+
+        val itemsById = runner.items.value.associateBy { it.id }
+        assertEquals(DiagnosticStatus.PASS, itemsById["omni_resident"]?.status)
+        assertTrue(itemsById["omni_resident"]?.detail?.contains("Omni stays resident") == true)
+        assertTrue(engine.hasExtraModel)
+    }
+
+    @Test
+    fun runAllOmniResidentFailsWhenLoadFails() = runTest {
+        val engine = FakeEngine()
+        engine.loadExtraModelResult = false
+        val omniFile = tempFolder.newFile("omni.gguf")
+
+        val runner = DiagnosticsRunner(
+            engine = engine,
+            getSettings = { AppSettings() },
+            installedFile = { spec -> if (spec == com.vanskis.liquidpocket.MEDIA_MODEL) omniFile else null },
+            cacheDir = tempFolder.newFolder(),
+            scope = this,
+            ioDispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        runner.runAll()
+        advanceUntilIdle()
+
+        val itemsById = runner.items.value.associateBy { it.id }
+        assertEquals(DiagnosticStatus.FAIL, itemsById["omni_resident"]?.status)
+        assertTrue(itemsById["omni_resident"]?.detail?.contains("loadExtraModel returned false") == true)
     }
 }
